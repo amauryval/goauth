@@ -8,7 +8,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
-	"goauth/types"
+	"github.com/amauryval/goauth/types"
 )
 
 // signingAlgorithms are the signature algorithms a token may use.

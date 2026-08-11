@@ -1,4 +1,4 @@
-# auth
+# goauth
 
 Bearer token verification and role based authorization for HTTP APIs.
 
@@ -16,6 +16,19 @@ presents, and decides what their bearer may do.
 
 Setting a provider up is covered in `SETUP.md`.
 
+## Installation
+
+```sh
+go get github.com/amauryval/goauth
+```
+
+```go
+import (
+    "github.com/amauryval/goauth"
+    "github.com/amauryval/goauth/types"
+)
+```
+
 ## Usage
 
 A deployment builds its `Auth` from a `Settings`, which records what the host declares and exposes
@@ -27,9 +40,9 @@ names the variables a host is expected to read, through `DemoEnv`, `ProviderEnv`
 `AudienceEnv`, `AdminRoleEnv` and `GuestRoleEnv`.
 
 ```go
-authApp, err := auth.New(
+authApp, err := goauth.New(
     ctx,
-    auth.NewSettings(false, "pocketid", "https://auth.example.com", "portfolio", "portfolio_admin", "portfolio_viewer"),
+    goauth.NewSettings(false, "pocketid", "https://auth.example.com", "portfolio", "portfolio_admin", "portfolio_viewer"),
     slog.Default(),
 )
 
@@ -42,7 +55,7 @@ router.Group(func(r chi.Router) {
 ```
 
 It contacts the issuer once to discover its public keys, then caches and rotates them. It fails when
-the provider is unreachable. `auth.NewWithVerifier` is the same thing one level down, for a host
+the provider is unreachable. `goauth.NewWithVerifier` is the same thing one level down, for a host
 injecting its own `TokenVerifier` rather than mapping two role names.
 
 ### Local development
@@ -56,7 +69,7 @@ built for it. And it refuses to start beside a declared provider, issuer or audi
 silently ignoring them.
 
 ```go
-authApp, err := auth.New(ctx, auth.NewSettings(true, "", "", "", "", ""), slog.Default())
+authApp, err := goauth.New(ctx, goauth.NewSettings(true, "", "", "", "", ""), slog.Default())
 ```
 
 ```bash

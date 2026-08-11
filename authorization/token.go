@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"goauth/types"
+	"github.com/amauryval/goauth/types"
 )
 
 // tokenAuthorizer authorizes the users whose token already carries a role the application knows.

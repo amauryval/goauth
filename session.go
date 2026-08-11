@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"goauth/types"
+	"github.com/amauryval/goauth/types"
 )
 
 // Root is the subtree the endpoints of this module hang from, relative to the API root.

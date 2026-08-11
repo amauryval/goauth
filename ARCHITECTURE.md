@@ -36,7 +36,7 @@ authorization code flow with PKCE and holds the tokens; this module only verifie
 4. The claims become a `UserInfo`, passed to the `Authorizer`.
 5. The policy returns a `Decision` carrying the granted roles. An unauthorized user, or one missing
    a required role, is a `403`.
-6. The handler runs, with the user reachable through `auth.UserFrom(ctx)`.
+6. The handler runs, with the user reachable through `goauth.UserFrom(ctx)`.
 
 ## Design notes
 

@@ -1,4 +1,4 @@
-module goauth
+module github.com/amauryval/goauth
 
 go 1.26
 

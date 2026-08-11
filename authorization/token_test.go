@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"goauth/authorization"
-	"goauth/types"
+	"github.com/amauryval/goauth/authorization"
+	"github.com/amauryval/goauth/types"
 )
 
 func setupUser() *types.UserInfo {

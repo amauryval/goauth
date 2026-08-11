@@ -3,7 +3,7 @@ package verifier
 import (
 	"context"
 
-	"goauth/types"
+	"github.com/amauryval/goauth/types"
 )
 
 // Static authorizes a fixed user without contacting an issuer, ignoring the token it receives.

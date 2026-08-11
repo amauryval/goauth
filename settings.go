@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"goauth/authorization"
-	"goauth/provider"
-	"goauth/types"
+	"github.com/amauryval/goauth/authorization"
+	"github.com/amauryval/goauth/provider"
+	"github.com/amauryval/goauth/types"
 )
 
 const (

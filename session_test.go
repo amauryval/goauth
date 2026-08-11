@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"goauth/testdata"
-	"goauth/types"
+	"github.com/amauryval/goauth/internal/mock"
+	"github.com/amauryval/goauth/types"
 )
 
 func Test_Auth_SessionHandler(t *testing.T) {
@@ -53,12 +53,12 @@ func Test_Auth_SessionHandler(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			verifier := &testdata.MockVerifier{
+			verifier := &mock.MockVerifier{
 				Info: types.SessionInfo{
 					LoggedIn:   true,
 					Authorized: c.authorized,
 					Roles:      c.grantedRoles,
-					User:       testdata.SetupMockUser(),
+					User:       mock.SetupMockUser(),
 				},
 			}
 			if c.verifyErr {
@@ -106,7 +106,7 @@ func Test_Auth_ConfigHandler(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			built := setupAuth(t, &testdata.MockVerifier{})
+			built := setupAuth(t, &mock.MockVerifier{})
 			built.issuerURL = c.issuerURL
 			built.audience = c.audience
 			built.scopes = c.scopes
@@ -125,7 +125,7 @@ func Test_Auth_ConfigHandler(t *testing.T) {
 }
 
 func Test_Auth_SessionHandler_PolicyUnavailable(t *testing.T) {
-	verifier := &testdata.MockVerifier{
+	verifier := &mock.MockVerifier{
 		Err: fmt.Errorf("%w: store unreachable", types.ErrAuthorization),
 	}
 

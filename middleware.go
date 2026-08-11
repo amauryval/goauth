@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"goauth/types"
+	"github.com/amauryval/goauth/types"
 )
 
 // bearerPrefix is the scheme expected in the Authorization header.

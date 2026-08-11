@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 
-	"goauth/provider"
-	"goauth/types"
-	"goauth/verifier"
+	"github.com/amauryval/goauth/provider"
+	"github.com/amauryval/goauth/types"
+	"github.com/amauryval/goauth/verifier"
 )
 
 // Auth turns verified bearer tokens into authorization decisions for HTTP handlers.

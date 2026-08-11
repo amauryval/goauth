@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"goauth/testdata"
-	"goauth/types"
+	"github.com/amauryval/goauth/internal/mock"
+	"github.com/amauryval/goauth/types"
 )
 
 const roleEditor = types.Role("editor")
@@ -146,12 +146,12 @@ func Test_Auth_RequireRoles(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			verifier := &testdata.MockVerifier{
+			verifier := &mock.MockVerifier{
 				Info: types.SessionInfo{
 					LoggedIn:   true,
 					Authorized: c.authorized,
 					Roles:      c.grantedRoles,
-					User:       testdata.SetupMockUser(),
+					User:       mock.SetupMockUser(),
 				},
 			}
 			if c.verifyErr {
@@ -169,7 +169,7 @@ func Test_Auth_RequireRoles(t *testing.T) {
 
 					user, found := UserFrom(r.Context())
 					assert.True(t, found)
-					assert.Equal(t, testdata.SetupMockUser().ID, user.ID)
+					assert.Equal(t, mock.SetupMockUser().ID, user.ID)
 				}),
 			)
 
@@ -220,12 +220,12 @@ func Test_Auth_RequireAnyRole(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			verifier := &testdata.MockVerifier{
+			verifier := &mock.MockVerifier{
 				Info: types.SessionInfo{
 					LoggedIn:   true,
 					Authorized: true,
 					Roles:      c.grantedRoles,
-					User:       testdata.SetupMockUser(),
+					User:       mock.SetupMockUser(),
 				},
 			}
 
@@ -265,7 +265,7 @@ func Test_UserFrom(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := context.Background()
 			if c.hasUser {
-				ctx = context.WithValue(ctx, userContextKey{}, testdata.SetupMockUser())
+				ctx = context.WithValue(ctx, userContextKey{}, mock.SetupMockUser())
 			}
 
 			user, found := UserFrom(ctx)
@@ -273,7 +273,7 @@ func Test_UserFrom(t *testing.T) {
 			assert.Equal(t, c.wantUser, found)
 			if c.wantUser {
 				require.NotNil(t, user)
-				assert.Equal(t, testdata.SetupMockUser().ID, user.ID)
+				assert.Equal(t, mock.SetupMockUser().ID, user.ID)
 
 				return
 			}

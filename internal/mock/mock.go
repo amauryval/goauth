@@ -1,10 +1,10 @@
-package testdata
+package mock
 
 import (
 	"context"
 
-	"goauth/authorization"
-	"goauth/types"
+	"github.com/amauryval/goauth/authorization"
+	"github.com/amauryval/goauth/types"
 )
 
 // MockRole is the provider role name the mock user carries.

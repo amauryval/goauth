@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"goauth/provider"
-	"goauth/testdata"
-	"goauth/types"
+	"github.com/amauryval/goauth/internal/mock"
+	"github.com/amauryval/goauth/provider"
+	"github.com/amauryval/goauth/types"
 )
 
 func Test_NewWithVerifier(t *testing.T) {
@@ -39,7 +39,7 @@ func Test_NewWithVerifier(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var verifier types.TokenVerifier
 			if !c.noVerifier {
-				verifier = &testdata.MockVerifier{}
+				verifier = &mock.MockVerifier{}
 			}
 
 			var logger types.Logger
