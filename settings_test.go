@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"auth/types"
+	"goauth/types"
 )
 
 func setupLogger() types.Logger {

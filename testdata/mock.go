@@ -3,8 +3,8 @@ package testdata
 import (
 	"context"
 
-	"auth/authorization"
-	"auth/types"
+	"goauth/authorization"
+	"goauth/types"
 )
 
 // MockRole is the provider role name the mock user carries.

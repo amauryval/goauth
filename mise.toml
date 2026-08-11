@@ -1,0 +1,14 @@
+[env]
+
+[tools]
+go = "1.26.4"
+golangci-lint = "2.12.2"
+pre-commit = "4.6.0"
+
+# The demo path only exists under the authdemo tag, so it is exercised by a second run.
+[tasks.test-auth]
+run = """
+go test ./... -cover
+go test -tags authdemo ./...
+"""
+description = "Run auth Go tests with coverage"
