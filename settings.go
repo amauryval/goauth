@@ -1,12 +1,12 @@
-package auth
+package goauth
 
 import (
 	"fmt"
 	"strings"
 
-	"auth/authorization"
-	"auth/provider"
-	"auth/types"
+	"goauth/authorization"
+	"goauth/provider"
+	"goauth/types"
 )
 
 const (

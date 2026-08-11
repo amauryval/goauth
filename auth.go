@@ -1,15 +1,15 @@
 // Package auth verifies OIDC bearer tokens and exposes role based HTTP middleware.
 // Authentication happens at a central identity provider: this module only validates its tokens.
-package auth
+package goauth
 
 import (
 	"context"
 	"errors"
 	"fmt"
 
-	"auth/provider"
-	"auth/types"
-	"auth/verifier"
+	"goauth/provider"
+	"goauth/types"
+	"goauth/verifier"
 )
 
 // Auth turns verified bearer tokens into authorization decisions for HTTP handlers.

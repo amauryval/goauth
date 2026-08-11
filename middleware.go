@@ -1,4 +1,4 @@
-package auth
+package goauth
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"auth/types"
+	"goauth/types"
 )
 
 // bearerPrefix is the scheme expected in the Authorization header.

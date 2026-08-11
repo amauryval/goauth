@@ -1,4 +1,4 @@
-package auth
+package goauth
 
 import (
 	"encoding/json"
@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"auth/types"
+	"goauth/types"
 )
 
 // Root is the subtree the endpoints of this module hang from, relative to the API root.

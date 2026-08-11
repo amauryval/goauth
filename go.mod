@@ -1,4 +1,4 @@
-module auth
+module goauth
 
 go 1.26
 

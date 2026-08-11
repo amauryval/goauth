@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"auth/types"
+	"goauth/types"
 )
 
 // tokenAuthorizer authorizes the users whose token already carries a role the application knows.

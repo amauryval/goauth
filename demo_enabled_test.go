@@ -1,6 +1,6 @@
 //go:build authdemo
 
-package auth
+package goauth
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package auth
+package goauth
 
 import (
 	"encoding/json"
@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"auth/testdata"
-	"auth/types"
+	"goauth/testdata"
+	"goauth/types"
 )
 
 func Test_Auth_SessionHandler(t *testing.T) {

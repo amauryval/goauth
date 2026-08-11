@@ -1,4 +1,4 @@
-package auth
+package goauth
 
 import (
 	"context"
@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"auth/provider"
-	"auth/testdata"
-	"auth/types"
+	"goauth/provider"
+	"goauth/testdata"
+	"goauth/types"
 )
 
 func Test_NewWithVerifier(t *testing.T) {

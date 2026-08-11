@@ -1,6 +1,6 @@
 //go:build authdemo
 
-package auth
+package goauth
 
 // demoCompiled reports that this binary was built with the authdemo tag, so demo mode may run.
 const demoCompiled = true
