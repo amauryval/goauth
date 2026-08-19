@@ -30,7 +30,7 @@ var PocketID = Provider{
 	name:              "pocketid",
 	rolesClaim:        "groups",
 	rolesFromUserInfo: true,
-	scopes:            []string{"openid", "profile", "email", "groups"},
+	scopes:            []string{"openid", "profile", "email", "offline_access", "groups"},
 }
 
 // supported lists the providers a deployment may choose from, in the order Names reports them.

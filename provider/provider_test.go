@@ -8,6 +8,8 @@ import (
 )
 
 func Test_Parse(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name           string
 		declared       string
@@ -31,7 +33,7 @@ func Test_Parse(t *testing.T) {
 			wantName:       "pocketid",
 			wantRolesClaim: "groups",
 			wantUserInfo:   true,
-			wantScopes:     []string{"openid", "profile", "email", "groups"},
+			wantScopes:     []string{"openid", "profile", "email", "offline_access", "groups"},
 		},
 		{
 			name:           "the name is read whatever its case",
@@ -55,6 +57,8 @@ func Test_Parse(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			parsed, err := Parse(c.declared)
 
 			if c.wantErr {
@@ -75,6 +79,8 @@ func Test_Parse(t *testing.T) {
 }
 
 func Test_Names(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		want string
@@ -87,6 +93,8 @@ func Test_Names(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			assert.Equal(t, c.want, Names())
 		})
 	}

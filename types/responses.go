@@ -9,6 +9,7 @@ type SessionInfo struct {
 }
 
 // ErrorResponse represents an error response.
+// Error is a stable code a client may branch on, Message a sentence for whoever reads it.
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`

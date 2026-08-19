@@ -1,0 +1,39 @@
+# Hooks run through mise, so a contributor gets the same Go and golangci-lint versions
+# mise.toml pins, rather than whatever their PATH happens to hold.
+repos:
+    - repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: v6.0.0
+      hooks:
+          - id: trailing-whitespace
+          - id: end-of-file-fixer
+          - id: check-yaml
+          - id: check-merge-conflict
+
+    - repo: local
+      hooks:
+          - id: gofmt
+            name: gofmt
+            entry: mise exec -- gofmt -l -w
+            language: system
+            types: [go]
+
+          - id: go-vet
+            name: go vet
+            entry: mise exec -- go vet ./...
+            language: system
+            types: [go]
+            pass_filenames: false
+
+          - id: golangci-lint
+            name: golangci-lint
+            entry: mise exec -- golangci-lint run ./...
+            language: system
+            types: [go]
+            pass_filenames: false
+
+          - id: go-test
+            name: go test
+            entry: mise run test
+            language: system
+            types: [go]
+            pass_filenames: false

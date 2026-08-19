@@ -40,6 +40,29 @@ const (
 	defaultGuestRole = "guest"
 )
 
+// Options is what a host declares about a deployment, each setting named at the call site.
+// The settings are strings that would otherwise sit side by side in a parameter list, where
+// swapping the issuer and the audience still compiles and silently breaks audience isolation.
+type Options struct {
+	// Demo bypasses token verification entirely. See Settings.Demo.
+	Demo bool
+
+	// ProviderName is the kind of identity provider, one of provider.Names(). Required.
+	ProviderName string
+
+	// IssuerURL is the identity provider base URL, used for discovery and key retrieval.
+	IssuerURL string
+
+	// Audience is this application's client Id, checked against the token audience.
+	Audience string
+
+	// AdminRole is the name the provider gives the administration role, "admin" when empty.
+	AdminRole string
+
+	// GuestRole is the name the provider gives the read-only role, "guest" when empty.
+	GuestRole string
+}
+
 // Settings gathers the authentication settings of a deployment.
 type Settings struct {
 	demo         bool
@@ -51,15 +74,15 @@ type Settings struct {
 }
 
 // NewSettings gathers the settings of a deployment, as the host declares them.
-// Reading them from the environment is the host's business, not this module's.
-func NewSettings(demo bool, providerName, issuerURL, audience, adminRole, guestRole string) Settings {
+// Reading them from flags or from the environment is the host's business, not this module's.
+func NewSettings(options Options) Settings {
 	return Settings{
-		demo:         demo,
-		providerName: providerName,
-		issuerURL:    issuerURL,
-		audience:     audience,
-		adminRole:    adminRole,
-		guestRole:    guestRole,
+		demo:         options.Demo,
+		providerName: options.ProviderName,
+		issuerURL:    options.IssuerURL,
+		audience:     options.Audience,
+		adminRole:    options.AdminRole,
+		guestRole:    options.GuestRole,
 	}
 }
 

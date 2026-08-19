@@ -1,3 +1,5 @@
+// Package mock holds the fixtures the module's own tests share: a user, an authorizer granting it
+// a role, and a TokenVerifier returning whatever a test wants verification to have concluded.
 package mock
 
 import (
@@ -24,16 +26,16 @@ func SetupAuthorizer() types.Authorizer {
 	return authorization.FromTokenNames(map[string]types.Role{MockRole: types.RoleAdmin})
 }
 
-// MockVerifier is a TokenVerifier returning a canned result, for middleware tests.
+// Verifier is a TokenVerifier returning a canned result, for middleware tests.
 // It records the token it received, so callers can assert how it was extracted.
-type MockVerifier struct {
+type Verifier struct {
 	Info          types.SessionInfo
 	Err           error
 	ReceivedToken string
 }
 
 // Verify records the token and returns the configured result.
-func (m *MockVerifier) Verify(_ context.Context, rawToken string) (types.SessionInfo, error) {
+func (m *Verifier) Verify(_ context.Context, rawToken string) (types.SessionInfo, error) {
 	m.ReceivedToken = rawToken
 
 	return m.Info, m.Err

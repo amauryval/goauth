@@ -6,9 +6,23 @@ golangci-lint = "2.12.2"
 pre-commit = "4.6.0"
 
 # The demo path only exists under the authdemo tag, so it is exercised by a second run.
-[tasks.test-auth]
+[tasks.test]
 run = """
-go test ./... -cover
-go test -tags authdemo ./...
+go test -race ./... -cover
+go test -race -tags authdemo ./...
 """
-description = "Run auth Go tests with coverage"
+description = "Run the tests, with and without the demo build tag"
+
+[tasks.lint]
+run = """
+gofmt -l .
+go vet ./...
+go vet -tags authdemo ./...
+golangci-lint run ./...
+golangci-lint run --build-tags authdemo ./...
+"""
+description = "Format check, vet and lint, with and without the demo build tag"
+
+[tasks.check]
+depends = ["lint", "test"]
+description = "Everything CI runs"

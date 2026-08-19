@@ -11,6 +11,8 @@ import (
 )
 
 func Test_New_demo(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name         string
 		providerName string
@@ -36,7 +38,9 @@ func Test_New_demo(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			settings := NewSettings(true, c.providerName, c.issuerURL, c.audience, "", "")
+			t.Parallel()
+
+			settings := NewSettings(Options{Demo: true, ProviderName: c.providerName, IssuerURL: c.issuerURL, Audience: c.audience})
 
 			built, err := New(context.Background(), settings, setupLogger())
 

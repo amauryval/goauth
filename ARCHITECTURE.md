@@ -2,7 +2,7 @@
 
 ## Position
 
-`auth` is a standalone Go module. It depends on no application package, so it can be shared by
+`goauth` is a standalone Go module. It depends on no application package, so it can be shared by
 several apps: each one declares its own audience and its own authorization policy.
 
 Authentication is delegated to a central OIDC identity provider. The browser performs the
@@ -10,14 +10,17 @@ authorization code flow with PKCE and holds the tokens; this module only verifie
 
 ## Packages
 
--   `auth` — the facade and the deployment entry point: `Settings` and `NewSettings` holding what
+-   `goauth` — the facade and the deployment entry point: `Options` and `NewSettings` holding what
     the host declares, `New` assembling the verifier and the policy from them, `Auth`, the
     `RequireRoles` and `RequireAnyRole` middlewares, `RegisterRoutes` mounting the config and
     session endpoints, and the bearer token extraction. It is the only package a host application
     needs to import.
 -   `verifier` — OIDC discovery, key set caching and rotation, token verification, and the claims to
     `UserInfo` mapping. It reads the roles from the claim it is handed, and knows no provider by
-    name. `Static` bypasses all of it for local development.
+    name. Where the roles live at the UserInfo endpoint rather than in the token, it caches them
+    per token so a busy API does not query the provider on every request. `Static` bypasses all of
+    it for a host injecting a fixed user, and `NewUnverified` — the one authorizing everyone — only
+    exists in binaries built with the `authdemo` tag.
 -   `provider` — the identity providers a deployment may choose from, `zitadel` and `pocketid`, each
     holding what reading its tokens demands: the roles claim, and the scopes the browser requests.
 -   `authorization` — `FromToken` and `FromTokenNames`, mapping the role names the provider asserts
@@ -38,6 +41,10 @@ authorization code flow with PKCE and holds the tokens; this module only verifie
    a required role, is a `403`.
 6. The handler runs, with the user reachable through `goauth.UserFrom(ctx)`.
 
+A policy that could not be evaluated at all is a `503` rather than a `401` or a `403`, carried by
+`types.ErrAuthorization`. Reading the roles from an unreachable UserInfo endpoint fails that way
+too: a user stripped of every role by a provider outage is a service problem, not a denied caller.
+
 ## Design notes
 
 -   **Verification in the app, not in a proxy.** A forward auth proxy would sit in front of every
@@ -50,8 +57,9 @@ authorization code flow with PKCE and holds the tokens; this module only verifie
 -   **`TokenVerifier` is an interface.** Real verification and the development bypass are two
     implementations, so the middleware never learns which one it is talking to.
 -   **Demo mode is a compile-time opt-in.** `New` refuses it unless the binary carries the
-    `authdemo` tag, so disabling token verification takes a deliberate build and not a stray
-    environment variable. The refusal to run beside a declared provider covers the rest.
+    `authdemo` tag, and the verifier authorizing every visitor is not compiled into any other
+    build: no import path reaches it, so disabling token verification takes a deliberate build and
+    not a stray environment variable. The refusal to run beside a declared provider covers the rest.
 -   **The provider is named, never guessed.** No standard names the claim carrying roles, so
     `AUTH_PROVIDER` is required and an unknown name is refused at startup. Defaulting it would read
     roles from a claim nobody fills and deny everyone, a failure that looks like a permission bug.

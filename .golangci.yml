@@ -1,0 +1,42 @@
+version: "2"
+
+# The module verifies bearer tokens, so the linters worth running are the ones catching the
+# mistakes that quietly widen access: an ignored error, an unclosed body, a comparison against
+# a sentinel that stopped being one.
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+    - unparam
+    - wsl_v5
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: error-strings
+        - name: context-as-argument
+
+  exclusions:
+    rules:
+      # Tests sign their own tokens and start their own servers: the hardening rules that matter
+      # for the module itself only add noise there.
+      - path: _test\.go$
+        linters:
+          - bodyclose
+          - gosec
+          - noctx
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -116,25 +116,27 @@ func holdsAny(granted, required []types.Role) bool {
 
 // respondUnauthorized writes a generic 401 response, without leaking internal details.
 func respondUnauthorized(w http.ResponseWriter) {
-	respondStatus(w, http.StatusUnauthorized, "unauthorized")
+	respondStatus(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
 }
 
 // respondForbidden writes a generic 403 response for an authenticated user missing a role.
 func respondForbidden(w http.ResponseWriter) {
-	respondStatus(w, http.StatusForbidden, "forbidden")
+	respondStatus(w, http.StatusForbidden, "forbidden", "this account is not allowed to perform this request")
 }
 
 // respondUnavailable writes a 503 response when the policy could not be evaluated.
 func respondUnavailable(w http.ResponseWriter) {
-	respondStatus(w, http.StatusServiceUnavailable, "unavailable")
+	respondStatus(w, http.StatusServiceUnavailable, "unavailable", "authorization is temporarily unavailable, retry shortly")
 }
 
-// respondStatus writes a JSON error carrying the same code and message.
-func respondStatus(w http.ResponseWriter, statusCode int, code string) {
+// respondStatus writes a JSON error carrying the stable code a client branches on, and a sentence
+// for whoever reads it. Neither names what actually failed: that is for the logs, not for a caller
+// who may be probing.
+func respondStatus(w http.ResponseWriter, statusCode int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(types.ErrorResponse{
 		Error:   code,
-		Message: code,
+		Message: message,
 	})
 }

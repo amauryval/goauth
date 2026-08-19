@@ -5,10 +5,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
 	"github.com/amauryval/goauth/types"
+)
+
+const (
+	// defaultUserInfoTTL is how long the roles read from the UserInfo endpoint are reused.
+	// It trades the delay a role change takes to be seen against a round trip per request, and is
+	// short enough that a revocation still lands within seconds.
+	defaultUserInfoTTL = 30 * time.Second
+
+	// defaultUserInfoTimeout bounds a UserInfo request, so an unresponsive provider fails the
+	// request rather than holding a server goroutine for as long as the client waits.
+	defaultUserInfoTimeout = 5 * time.Second
+
+	// maxCachedUserInfo bounds the number of cached UserInfo lookups, so an attacker presenting
+	// many valid tokens cannot grow the cache without end.
+	maxCachedUserInfo = 4096
 )
 
 // signingAlgorithms are the signature algorithms a token may use.
@@ -37,6 +53,15 @@ type Config struct {
 	// Providers emitting a bare access token state the roles there and nowhere else.
 	RolesFromUserInfo bool
 
+	// UserInfoTTL is how long the roles read from the UserInfo endpoint are reused for a token.
+	// Zero selects a 30s default, and a negative value disables caching, querying the provider on
+	// every request. Ignored unless RolesFromUserInfo is set.
+	UserInfoTTL time.Duration
+
+	// UserInfoTimeout bounds a single UserInfo request. Zero selects a 5s default.
+	// Ignored unless RolesFromUserInfo is set.
+	UserInfoTimeout time.Duration
+
 	// Logger receives verification failures. Defaults to types.DiscardLogger.
 	Logger types.Logger
 }
@@ -48,7 +73,12 @@ type Verifier struct {
 	authorizer        types.Authorizer
 	rolesClaim        string
 	rolesFromUserInfo bool
+	roles             *roleCache
+	userInfoTimeout   time.Duration
 	logger            types.Logger
+
+	// now reads the current time, replaced by the tests to age the cache without waiting.
+	now func() time.Time
 }
 
 // New builds a Verifier by discovering the issuer configuration and its public keys.
@@ -90,13 +120,26 @@ func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authoriz
 		logger = types.DiscardLogger{}
 	}
 
+	ttl := config.UserInfoTTL
+	if ttl == 0 {
+		ttl = defaultUserInfoTTL
+	}
+
+	timeout := config.UserInfoTimeout
+	if timeout <= 0 {
+		timeout = defaultUserInfoTimeout
+	}
+
 	return &Verifier{
 		provider:          provider,
 		tokens:            tokens,
 		authorizer:        authorizer,
 		rolesClaim:        config.RolesClaim,
 		rolesFromUserInfo: config.RolesFromUserInfo,
+		roles:             newRoleCache(ttl, maxCachedUserInfo),
+		userInfoTimeout:   timeout,
 		logger:            logger,
+		now:               time.Now,
 	}
 }
 
@@ -147,10 +190,15 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (types.SessionIn
 		return types.SessionInfo{}, errors.New("id token presented as an access token")
 	}
 
+	roles, err := v.tokenRoles(ctx, token, rawToken)
+	if err != nil {
+		return types.SessionInfo{}, err
+	}
+
 	user := &types.UserInfo{
 		Provider: token.Issuer,
 		ID:       claims.Subject,
-		Roles:    v.tokenRoles(ctx, token, rawToken),
+		Roles:    roles,
 	}
 
 	decision, err := v.authorizer.Authorize(ctx, user)

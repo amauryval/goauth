@@ -1,3 +1,6 @@
+// Package types holds the vocabulary shared by the module and by the applications embedding it:
+// the roles, the user a verified token describes, and the interfaces a host implements to plug in
+// its own verification or its own authorization policy.
 package types
 
 import (

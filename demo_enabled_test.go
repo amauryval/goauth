@@ -11,6 +11,8 @@ import (
 )
 
 func Test_New_demo(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 	}{
@@ -21,7 +23,9 @@ func Test_New_demo(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			built, err := New(context.Background(), NewSettings(true, "", "", "", "", ""), setupLogger())
+			t.Parallel()
+
+			built, err := New(context.Background(), NewSettings(Options{Demo: true}), setupLogger())
 
 			require.NoError(t, err)
 			assert.NotNil(t, built)

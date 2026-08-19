@@ -9,11 +9,13 @@ package types
 //
 // Roles are the raw role names the provider put in the token, before any policy ruled on them.
 // They are a claim like any other, so an authorization policy decides which of them it honours.
+// They are deliberately left out of the JSON encoding: what a browser is told are the roles the
+// policy granted, carried by SessionInfo, never the provider vocabulary behind them.
 //
 // Profile claims such as the name, the email or the avatar are deliberately absent: an access
 // token does not carry them. The browser reads them from its own ID token, where they belong.
 type UserInfo struct {
-	Provider string
-	ID       string
-	Roles    []string
+	Provider string   `json:"provider"`
+	ID       string   `json:"id"`
+	Roles    []string `json:"-"`
 }

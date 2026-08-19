@@ -31,22 +31,35 @@ import (
 
 ## Usage
 
-A deployment builds its `Auth` from a `Settings`, which records what the host declares and exposes
-each setting through its own method. Undeclared role names fall back to `admin` and `guest`, the
-names `SETUP.md` has you create at the provider.
+A deployment builds its `Auth` from a `Settings`, which records what the host declares through the
+named fields of an `Options`. Undeclared role names fall back to `admin` and `guest`, the names
+`SETUP.md` has you create at the provider.
 
 Reading the settings from flags or from the environment is the host's business: this module only
 names the variables a host is expected to read, through `DemoEnv`, `ProviderEnv`, `IssuerEnv`,
-`AudienceEnv`, `AdminRoleEnv` and `GuestRoleEnv`.
+`AudienceEnv`, `AdminRoleEnv` and `GuestRoleEnv`. `.env.example` spells out the mapping.
 
 ```go
-authApp, err := goauth.New(
-    ctx,
-    goauth.NewSettings(false, "pocketid", "https://auth.example.com", "portfolio", "portfolio_admin", "portfolio_viewer"),
-    slog.Default(),
-)
+authApp, err := goauth.New(ctx, goauth.NewSettings(goauth.Options{
+    ProviderName: os.Getenv(goauth.ProviderEnv), // "pocketid"
+    IssuerURL:    os.Getenv(goauth.IssuerEnv),   // "https://auth.example.com"
+    Audience:     os.Getenv(goauth.AudienceEnv), // "portfolio"
+    AdminRole:    os.Getenv(goauth.AdminRoleEnv), // "portfolio_admin", "admin" when empty
+    GuestRole:    os.Getenv(goauth.GuestRoleEnv), // "portfolio_viewer", "guest" when empty
+}), slog.Default())
+if err != nil {
+    return fmt.Errorf("auth: %w", err)
+}
+```
 
-authApp.RegisterRoutes(router)
+`New` contacts the issuer once to discover its public keys, then caches and rotates them. It fails
+when the provider is unreachable, so a misconfigured deployment refuses to start rather than
+rejecting every caller once it is up.
+
+Mount the endpoints and guard the routes:
+
+```go
+authApp.RegisterRoutes(router) // GET /auth/config and GET /auth/session
 
 router.Group(func(r chi.Router) {
     r.Use(authApp.RequireRoles(types.RoleAdmin))
@@ -54,22 +67,81 @@ router.Group(func(r chi.Router) {
 })
 ```
 
-It contacts the issuer once to discover its public keys, then caches and rotates them. It fails when
-the provider is unreachable. `goauth.NewWithVerifier` is the same thing one level down, for a host
-injecting its own `TokenVerifier` rather than mapping two role names.
+Inside a guarded handler, the authenticated user comes from the request context:
+
+```go
+func (h Handler) Add(w http.ResponseWriter, r *http.Request) {
+    user, ok := goauth.UserFrom(r.Context())
+    if !ok {
+        // Unreachable behind RequireRoles, which never calls the handler without a user.
+        http.Error(w, "unauthorized", http.StatusUnauthorized)
+
+        return
+    }
+
+    log.Printf("skill added by %s/%s", user.Provider, user.ID)
+}
+```
+
+`goauth.NewWithVerifier` is the same thing one level down, for a host injecting its own
+`TokenVerifier` rather than mapping two role names. The `Auth` it returns knows no provider, so
+`GET /auth/config` serves an empty client configuration: such a host tells the browser where to
+sign in by its own means.
+
+### Endpoints
+
+`RegisterRoutes` mounts two `GET` handlers on any router exposing `Get(string, http.HandlerFunc)`,
+which `chi.Router` does. Their paths are `goauth.ConfigPath` and `goauth.SessionPath`, both under
+`goauth.Root`, and the caller decides the API root they hang from.
+
+`GET /auth/config` — what the browser needs to start a login:
+
+```json
+{ "issuer_url": "https://auth.example.com", "client_id": "portfolio", "scopes": "openid profile email offline_access groups" }
+```
+
+`GET /auth/session` — who the caller is, always `200`, so an anonymous visitor is a fact rather
+than an error:
+
+```json
+{
+    "logged_in": true,
+    "authorized": true,
+    "roles": ["admin"],
+    "user": { "provider": "https://auth.example.com", "id": "0f7c..." }
+}
+```
+
+An absent, expired or rejected token yields `{"logged_in":false,"authorized":false}`. The `roles`
+are the ones the policy granted; the raw provider role names behind them stay server side.
+
+A rejected request on a guarded route answers with a stable code and a sentence:
+
+```json
+{ "error": "forbidden", "message": "this account is not allowed to perform this request" }
+```
+
+`error` is what a client branches on — `unauthorized` (401), `forbidden` (403), `unavailable`
+(503). Neither field names what actually failed: that is for the logs, not for a caller who may be
+probing.
 
 ### Local development
 
 `Demo` authorizes every visitor as admin without contacting any provider, and says so loudly in the
 logs. It must never be enabled in production, and two things stand between it and one.
 
-It is left out of the binary unless it is built with the `authdemo` tag, named by `DemoBuildTag`, so
-a misread environment variable cannot disable token verification on a deployment that was never
-built for it. And it refuses to start beside a declared provider, issuer or audience, rather than
-silently ignoring them.
+It is left out of the binary unless it is built with the `authdemo` tag, named by `DemoBuildTag`.
+The verifier authorizing every visitor, `verifier.NewUnverified`, is not compiled into any other
+build, so no import path reaches it: a misread environment variable cannot disable token
+verification on a deployment that was never built for it, and neither can a stray call. And demo
+mode refuses to start beside a declared provider, issuer or audience, rather than silently ignoring
+them.
+
+`verifier.NewStatic` is the ungated sibling, for a host wanting a fixed user in its own tests. It
+grants only what the caller spells out, so it opens nothing on its own.
 
 ```go
-authApp, err := goauth.New(ctx, goauth.NewSettings(true, "", "", "", "", ""), slog.Default())
+authApp, err := goauth.New(ctx, goauth.NewSettings(goauth.Options{Demo: true}), slog.Default())
 ```
 
 ```bash
@@ -118,6 +190,10 @@ email, no avatar. Those live in the ID token, which belongs to the browser and n
 module. `UserInfo` therefore holds `Provider` (the issuer), `ID` (the subject) and `Roles`, and
 nothing else. A UI needing a name or an avatar reads them from its own ID token.
 
+`Roles` there are the raw names the provider asserted, before any policy ruled on them, and they
+are left out of the JSON encoding on purpose: what a browser is told are the roles the policy
+granted, carried by the session's own `roles`, never the provider vocabulary behind them.
+
 Store the `(Provider, ID)` pair as an external identity beside your own user Id, never as the user
 Id itself: the pair identifies the user only within that issuer, so changing provider would turn
 into a data migration. To find a subject, sign in once and read `user.ID` from `GET /auth/session`,
@@ -139,10 +215,17 @@ declares in `AUTH_PROVIDER`. It is the only setting that has no default: guessin
 module read the roles from a claim nobody fills, denying everyone at once. An unknown name is
 refused at startup, with the supported ones listed.
 
-| `AUTH_PROVIDER` | Roles claim                         | Scopes the browser requests                  |
-| --------------- | ----------------------------------- | -------------------------------------------- |
-| `zitadel`       | `urn:zitadel:iam:org:project:roles` | `openid profile email offline_access`        |
-| `pocketid`      | `groups`                            | `openid profile email offline_access groups` |
+| `AUTH_PROVIDER` | Roles claim                         | Read from     | Scopes the browser requests                  |
+| --------------- | ----------------------------------- | ------------- | -------------------------------------------- |
+| `zitadel`       | `urn:zitadel:iam:org:project:roles` | the token     | `openid profile email offline_access`        |
+| `pocketid`      | `groups`                            | `/userinfo`   | `openid profile email offline_access groups` |
+
+Pocket ID emits a bare access token, so its roles are read from the UserInfo endpoint. That lookup
+is cached per token for 30s, so a busy API queries the provider once per token rather than once per
+request, and a role change is seen within that window. A UserInfo request that fails is not cached
+and yields a `503`, never an empty role set: a provider outage must not read as a permission
+problem. Both the TTL and the 5s request timeout are settings of `verifier.Config`, for a host
+assembling its verifier itself.
 
 Nothing else is read, and a token holding no roles claim is logged as a warning. The claim's value
 may be an array of names, or an object keyed by name as Zitadel emits; both are read.
@@ -194,3 +277,19 @@ same user:
 r.Use(authApp.RequireAnyRole(types.RoleAdmin, types.RoleGuest)) // reading the administration
 r.Use(authApp.RequireRoles(types.RoleAdmin))                    // changing the data
 ```
+
+## Development
+
+Toolchain versions are pinned in `mise.toml`, and the same commands CI runs are available as tasks:
+
+```sh
+mise install
+mise run check   # lint and test, with and without the demo build tag
+mise run test
+mise run lint
+pre-commit install
+```
+
+The demo path only compiles under `authdemo`, so both the tests and the linter run twice: once for
+the shipped build, once for the demo one. `.golangci.yml` pins the linters, and CI enforces
+`gofmt`, `go vet`, `go mod tidy` and a `-race` test run on both.

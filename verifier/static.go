@@ -7,7 +7,11 @@ import (
 )
 
 // Static authorizes a fixed user without contacting an issuer, ignoring the token it receives.
-// It exists for local development and demonstrations, and must never be enabled in production.
+// It exists for local development, demonstrations and host test suites, and must never be wired
+// into a deployment facing users.
+//
+// Unlike the demo verifier, it grants nothing on its own: the caller states the user and the roles,
+// so nothing is authorized that the host did not spell out. That is why it needs no build tag.
 type Static struct {
 	info types.SessionInfo
 }
@@ -27,16 +31,4 @@ func NewStatic(user *types.UserInfo, roles ...types.Role) *Static {
 // Verify returns the configured user, whatever the token.
 func (s *Static) Verify(_ context.Context, _ string) (types.SessionInfo, error) {
 	return s.info, nil
-}
-
-// DemoUserID identifies the fixed user returned in demo mode.
-const DemoUserID = "demo-user"
-
-// NewUnverified creates a verifier accepting any request as a fixed administrator,
-// without verifying a token at all. It must never be enabled in production.
-func NewUnverified() *Static {
-	return NewStatic(&types.UserInfo{
-		Provider: "demo",
-		ID:       DemoUserID,
-	}, types.RoleAdmin)
 }

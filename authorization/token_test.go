@@ -19,6 +19,8 @@ func setupUser() *types.UserInfo {
 }
 
 func Test_FromTokenNames(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name           string
 		claimed        []string
@@ -71,6 +73,8 @@ func Test_FromTokenNames(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			user := setupUser()
 			user.Roles = c.claimed
 
@@ -88,6 +92,8 @@ func Test_FromTokenNames(t *testing.T) {
 }
 
 func Test_FromToken(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name           string
 		claimed        []string
@@ -148,6 +154,8 @@ func Test_FromToken(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			user := setupUser()
 			user.Roles = c.claimed
 
