@@ -6,19 +6,14 @@ import (
 	"net/url"
 )
 
-// requireSecureIssuer refuses an issuer reached over cleartext, unless it is a loopback address
-// or the host deliberately allowed it.
+// requireSecureIssuer refuses an issuer reached over cleartext, unless it is a loopback address.
 //
 // The scheme is not a detail here: the module fetches the issuer's public keys over it, and
 // forwards the caller's live access token to its UserInfo endpoint. Over http, an on-path attacker
 // reads that credential and serves a key set of their own, which turns token verification into a
 // formality. Loopback is exempt because a local provider never leaves the machine, and that is how
 // the tests and a developer's own stack run.
-func requireSecureIssuer(issuerURL string, allowInsecure bool) error {
-	if allowInsecure {
-		return nil
-	}
-
+func requireSecureIssuer(issuerURL string) error {
 	parsed, err := url.Parse(issuerURL)
 	if err != nil {
 		return fmt.Errorf("the issuer URL is not a URL: %w", err)

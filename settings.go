@@ -3,6 +3,7 @@ package goauth
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/amauryval/goauth/authorization"
 	"github.com/amauryval/goauth/provider"
@@ -62,6 +63,16 @@ type Options struct {
 	// GuestRole is the name the provider gives the read-only role, "guest" when empty.
 	GuestRole string
 
+	// ClientSecret authenticates this application when it asks the issuer whether a token is still
+	// active, as RFC 7662 requires, and when it exchanges an authorization code. A client the
+	// provider issued none identifies itself by its id alone.
+	ClientSecret string
+
+	// IntrospectionTTL reuses the issuer's answer about a token for that long, trading how quickly
+	// its decisions land against a round trip per request. Zero selects 15 seconds; a negative
+	// value asks the issuer on every single request.
+	IntrospectionTTL time.Duration
+
 	// Browser asks for the login flow to be driven on the server, so the frontend never handles a
 	// token. Left nil, the browser obtains its own tokens and presents them as bearer tokens.
 	Browser *BrowserOptions
@@ -69,26 +80,30 @@ type Options struct {
 
 // Settings gathers the authentication settings of a deployment.
 type Settings struct {
-	demo         bool
-	providerName string
-	issuerURL    string
-	audience     string
-	adminRole    string
-	guestRole    string
-	browser      *BrowserOptions
+	demo          bool
+	providerName  string
+	issuerURL     string
+	audience      string
+	adminRole     string
+	guestRole     string
+	clientSecret  string
+	introspectTTL time.Duration
+	browser       *BrowserOptions
 }
 
 // NewSettings gathers the settings of a deployment, as the host declares them.
 // Reading them from flags or from the environment is the host's business, not this module's.
 func NewSettings(options Options) Settings {
 	return Settings{
-		demo:         options.Demo,
-		providerName: options.ProviderName,
-		issuerURL:    options.IssuerURL,
-		audience:     options.Audience,
-		adminRole:    options.AdminRole,
-		guestRole:    options.GuestRole,
-		browser:      options.Browser,
+		demo:          options.Demo,
+		providerName:  options.ProviderName,
+		issuerURL:     options.IssuerURL,
+		audience:      options.Audience,
+		adminRole:     options.AdminRole,
+		guestRole:     options.GuestRole,
+		clientSecret:  options.ClientSecret,
+		introspectTTL: options.IntrospectionTTL,
+		browser:       options.Browser,
 	}
 }
 
@@ -133,6 +148,16 @@ func (s Settings) GuestRole() string {
 	}
 
 	return s.guestRole
+}
+
+// ClientSecret returns the credential this application authenticates to the issuer with.
+func (s Settings) ClientSecret() string {
+	return s.clientSecret
+}
+
+// IntrospectionTTL returns how long the issuer's answer is reused for.
+func (s Settings) IntrospectionTTL() time.Duration {
+	return s.introspectTTL
 }
 
 // Browser reports the browser flow settings, nil when the deployment asked for none.

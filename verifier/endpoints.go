@@ -1,13 +1,8 @@
 package verifier
 
-import "golang.org/x/oauth2"
-
 // Endpoints are the issuer URLs a browser login flow drives, as discovery reported them.
 // Reading them off an already built Verifier is what keeps the module to a single discovery call.
 type Endpoints struct {
-	// Issuer is the identity provider base URL, as it names itself.
-	Issuer string
-
 	// Authorization is where the browser is sent to sign in.
 	Authorization string
 
@@ -16,12 +11,19 @@ type Endpoints struct {
 
 	// EndSession is where the browser is sent to sign out, empty when the issuer supports none.
 	EndSession string
+
+	// Revocation is where a refresh token is handed back, empty when the issuer advertises none.
+	// RFC 7009 is its own specification rather than part of OIDC, so a conforming provider may
+	// well support none: what depends on it degrades rather than fails.
+	Revocation string
 }
 
-// endSessionClaim reads the logout endpoint out of the discovery document, which go-oidc does not
-// surface: RP initiated logout is its own specification rather than part of OIDC Core.
-type endSessionClaim struct {
-	EndSession string `json:"end_session_endpoint"`
+// discoveryClaims reads the endpoints go-oidc does not surface, each belonging to a specification
+// of its own rather than to OIDC Core.
+type discoveryClaims struct {
+	EndSession    string `json:"end_session_endpoint"`
+	Revocation    string `json:"revocation_endpoint"`
+	Introspection string `json:"introspection_endpoint"`
 }
 
 // Endpoints reports the issuer URLs a browser login flow drives.
@@ -30,23 +32,14 @@ func (v *Verifier) Endpoints() Endpoints {
 		return Endpoints{}
 	}
 
-	var claim endSessionClaim
+	var claims discoveryClaims
 
-	_ = v.provider.Claims(&claim)
+	_ = v.provider.Claims(&claims)
 
 	return Endpoints{
-		Issuer:        v.issuerURL,
 		Authorization: v.provider.Endpoint().AuthURL,
 		Token:         v.provider.Endpoint().TokenURL,
-		EndSession:    claim.EndSession,
+		EndSession:    claims.EndSession,
+		Revocation:    claims.Revocation,
 	}
-}
-
-// OAuth2Endpoint reports the authorization and token URLs in the shape the oauth2 package expects.
-func (v *Verifier) OAuth2Endpoint() oauth2.Endpoint {
-	if v.provider == nil {
-		return oauth2.Endpoint{}
-	}
-
-	return v.provider.Endpoint()
 }

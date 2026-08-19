@@ -2,26 +2,15 @@ package browser
 
 import (
 	"crypto/subtle"
-	"errors"
 	"net/http"
 	"time"
 
 	"golang.org/x/oauth2"
 )
 
-// maxSessionLifetime bounds how long a browser keeps a session cookie.
-// The provider decides how long the tokens inside stay usable; this only bounds how long the
-// browser bothers presenting them.
-const maxSessionLifetime = 30 * 24 * time.Hour
-
 // sameValue compares two values without letting the time taken say how far they matched.
 func sameValue(left, right string) bool {
 	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
-}
-
-// errorsOf joins the errors that are not nil, for a single log line.
-func errorsOf(errs ...error) error {
-	return errors.Join(errs...)
 }
 
 // Token returns the access token of the calling browser, empty when it holds no session.
@@ -35,7 +24,7 @@ func errorsOf(errs ...error) error {
 // stay exactly what they are for a bearer token.
 func (f *Flow) Token(w http.ResponseWriter, r *http.Request) string {
 	var current session
-	if !f.read(r, f.sessionCookie, sessionPurpose, &current) {
+	if !f.read(r, sessionCookie, sessionPurpose, &current) {
 		return ""
 	}
 
@@ -44,7 +33,7 @@ func (f *Flow) Token(w http.ResponseWriter, r *http.Request) string {
 	}
 
 	if current.RefreshToken == "" {
-		f.clear(w, f.sessionCookie)
+		f.clear(w, sessionCookie)
 
 		return ""
 	}
@@ -52,14 +41,14 @@ func (f *Flow) Token(w http.ResponseWriter, r *http.Request) string {
 	renewed, err := f.refresh(r, current)
 	if err != nil {
 		f.logger.Warn("auth: the session could not be renewed", "error", err)
-		f.clear(w, f.sessionCookie)
+		f.clear(w, sessionCookie)
 
 		return ""
 	}
 
-	if err := f.establish(w, renewed); err != nil {
+	if err := f.establish(w, renewed, current.IDToken); err != nil {
 		f.logger.Error("auth: the renewed session could not be stored", "error", err)
-		f.clear(w, f.sessionCookie)
+		f.clear(w, sessionCookie)
 
 		return ""
 	}
@@ -79,7 +68,7 @@ func (f *Flow) expiring(current session) bool {
 
 // refresh spends the refresh token for a new access token.
 func (f *Flow) refresh(r *http.Request, current session) (*oauth2.Token, error) {
-	source := f.oauth2.TokenSource(r.Context(), &oauth2.Token{
+	source := f.oauth2.TokenSource(f.providerContext(r.Context()), &oauth2.Token{
 		AccessToken:  current.AccessToken,
 		RefreshToken: current.RefreshToken,
 		Expiry:       current.Expiry,
@@ -99,7 +88,23 @@ func (f *Flow) refresh(r *http.Request, current session) (*oauth2.Token, error) 
 	return renewed, nil
 }
 
-// Clear drops the session of the calling browser, for a host signing someone out on its own terms.
-func (f *Flow) Clear(w http.ResponseWriter) {
-	f.clear(w, f.sessionCookie)
+// Allow reports whether a request may proceed, and is where the session's own CSRF check lives.
+//
+// It only rules on requests that carry the session cookie: a caller presenting a bearer token
+// chose to present it, and no other site can make that choice for them. A cookie is sent by the
+// browser whether or not the visitor meant to, which is the whole of the problem.
+func (f *Flow) Allow(r *http.Request) bool {
+	if _, err := r.Cookie(sessionCookie); err != nil {
+		// No session cookie: whatever credential this request carries, it was attached on purpose.
+		return true
+	}
+
+	if f.sameOrigin(r) {
+		return true
+	}
+
+	f.logger.Warn("auth: refused a cross-site request carrying the session",
+		"path", r.URL.Path, "method", r.Method, "origin", r.Header.Get("Origin"))
+
+	return false
 }

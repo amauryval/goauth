@@ -1,8 +1,8 @@
 package browser
 
 import (
+	"errors"
 	"net/http"
-	"net/url"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -20,7 +20,7 @@ func (f *Flow) LoginHandler() http.HandlerFunc {
 		codeVerifier, verifierErr := randomValue(32)
 
 		if stateErr != nil || nonceErr != nil || verifierErr != nil {
-			f.logger.Error("auth: could not start a login", "error", errorsOf(stateErr, nonceErr, verifierErr))
+			f.logger.Error("auth: could not start a login", "error", errors.Join(stateErr, nonceErr, verifierErr))
 			http.Error(w, "login unavailable", http.StatusServiceUnavailable)
 
 			return
@@ -33,13 +33,14 @@ func (f *Flow) LoginHandler() http.HandlerFunc {
 			returnTo = ""
 		}
 
-		err := f.write(w, f.pendingCookie, pendingPurpose, pending{
+		// The cookie lives as long as the browser session: what bounds the login is the
+		// authorization code the provider issued, not anything decided here.
+		err := f.write(w, pendingCookie, pendingPurpose, pending{
 			State:        state,
 			Nonce:        nonce,
 			CodeVerifier: codeVerifier,
 			ReturnTo:     returnTo,
-			ExpiresAt:    time.Now().Add(pendingLifetime),
-		}, pendingLifetime)
+		}, 0)
 		if err != nil {
 			f.logger.Error("auth: could not start a login", "error", err)
 			http.Error(w, "login unavailable", http.StatusServiceUnavailable)
@@ -65,21 +66,14 @@ func (f *Flow) CallbackHandler() http.HandlerFunc {
 		noStore(w)
 
 		var started pending
-		if !f.read(r, f.pendingCookie, pendingPurpose, &started) {
+		if !f.read(r, pendingCookie, pendingPurpose, &started) {
 			f.logger.Warn("auth: a login came back without having been started")
 			http.Error(w, "no login in progress", http.StatusBadRequest)
 
 			return
 		}
 
-		f.clear(w, f.pendingCookie)
-
-		if time.Now().After(started.ExpiresAt) {
-			f.logger.Warn("auth: a login came back too late")
-			http.Error(w, "the login expired, start it again", http.StatusBadRequest)
-
-			return
-		}
+		f.clear(w, pendingCookie)
 
 		query := r.URL.Query()
 
@@ -108,7 +102,19 @@ func (f *Flow) CallbackHandler() http.HandlerFunc {
 			return
 		}
 
-		if err := f.establish(w, token); err != nil {
+		// OpenID Connect Core 3.1.3.7. The access token says nothing about who signed in, and is
+		// not meant to: the ID token is what names them, and it is worth nothing unverified.
+		rawIDToken, _ := token.Extra("id_token").(string)
+
+		err = f.idTokens.VerifyIDToken(r.Context(), rawIDToken, started.Nonce)
+		if err != nil {
+			f.logger.Error("auth: the id token could not be verified", "error", err)
+			http.Error(w, "the login could not be verified", http.StatusForbidden)
+
+			return
+		}
+
+		if err := f.establish(w, token, rawIDToken); err != nil {
 			f.logger.Error("auth: the session could not be established", "error", err)
 			http.Error(w, "the login could not be completed", http.StatusInternalServerError)
 
@@ -127,52 +133,66 @@ func (f *Flow) CallbackHandler() http.HandlerFunc {
 func (f *Flow) LogoutHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		noStore(w)
-		f.clear(w, f.sessionCookie)
-		f.clear(w, f.pendingCookie)
 
-		if f.endSessionURL == "" || f.postLogoutURL == "" {
+		var current session
+
+		hadSession := f.read(r, sessionCookie, sessionPurpose, &current)
+
+		f.clear(w, sessionCookie)
+		f.clear(w, pendingCookie)
+
+		if hadSession {
+			f.revoke(r.Context(), current.RefreshToken)
+		}
+
+		target := f.endSession(current.IDToken)
+		if target == "" {
 			w.WriteHeader(http.StatusNoContent)
 
 			return
 		}
 
-		endSession, err := url.Parse(f.endSessionURL)
-		if err != nil {
-			f.logger.Error("auth: the issuer logout URL is not a URL", "error", err)
-			w.WriteHeader(http.StatusNoContent)
-
-			return
-		}
-
-		query := endSession.Query()
-		query.Set("client_id", f.oauth2.ClientID)
-		query.Set("post_logout_redirect_uri", f.postLogoutURL)
-		endSession.RawQuery = query.Encode()
-
-		http.Redirect(w, r, endSession.String(), http.StatusFound)
+		http.Redirect(w, r, target, http.StatusFound)
 	}
 }
 
 // establish seals the tokens into the session cookie.
-func (f *Flow) establish(w http.ResponseWriter, token *oauth2.Token) error {
-	return f.write(w, f.sessionCookie, sessionPurpose, session{
+func (f *Flow) establish(w http.ResponseWriter, token *oauth2.Token, rawIDToken string) error {
+	established := session{
 		AccessToken:  token.AccessToken,
 		RefreshToken: token.RefreshToken,
 		Expiry:       token.Expiry,
-	}, sessionLifetime(token))
-}
-
-// sessionLifetime is how long the browser keeps the session cookie.
-// A refresh token outlives its access token by design, so the cookie follows the longer of the
-// two: dropping it at the access token's expiry would end a session the provider would have
-// renewed without a word.
-func sessionLifetime(token *oauth2.Token) time.Duration {
-	if token.RefreshToken != "" {
-		return maxSessionLifetime
+		IDToken:      rawIDToken,
 	}
 
-	if token.Expiry.IsZero() {
-		return maxSessionLifetime
+	err := f.write(w, sessionCookie, sessionPurpose, established, cookieLifetime(token))
+	if err == nil {
+		return nil
+	}
+
+	// The ID token is the largest thing in there and the least needed: it only serves as the hint
+	// of an RP initiated logout. A session that would not fit is kept without it rather than
+	// refused, which costs a logout hint and saves the login.
+	if established.IDToken == "" {
+		return err
+	}
+
+	f.logger.Warn("auth: the session does not fit in a cookie with its id token, dropping the logout hint")
+
+	established.IDToken = ""
+
+	return f.write(w, sessionCookie, sessionPurpose, established, cookieLifetime(token))
+}
+
+// cookieLifetime is how long the browser keeps the session cookie.
+//
+// With a refresh token it is the browsing session: how long the sign in stays good is the
+// provider's to decide, and this module has nothing to state a date from. Without one, the access
+// token's own expiry is the whole of the session, and there is no reason to keep the cookie past
+// it.
+func cookieLifetime(token *oauth2.Token) time.Duration {
+	if token.RefreshToken != "" || token.Expiry.IsZero() {
+		return 0
 	}
 
 	return time.Until(token.Expiry)

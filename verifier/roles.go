@@ -52,7 +52,7 @@ func (v *Verifier) userInfoRoles(ctx context.Context, rawToken, subject string, 
 		return roles, nil
 	}
 
-	requestCtx, cancel := context.WithTimeout(issuerContext(ctx, v.httpClient), v.userInfoTimeout)
+	requestCtx, cancel := context.WithTimeout(issuerContext(ctx, v.httpClient), providerTimeout)
 	defer cancel()
 
 	info, err := v.provider.UserInfo(requestCtx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: rawToken}))

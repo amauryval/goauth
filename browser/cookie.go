@@ -14,11 +14,6 @@ const (
 	// pendingPurpose labels the cookie holding a login in flight.
 	pendingPurpose = "goauth.pending"
 
-	// pendingLifetime is how long a started login may take to come back.
-	// It is a bound on how long a state and a code verifier stay usable, not on how long a human
-	// may take to type a password: the provider holds them from there on.
-	pendingLifetime = 15 * time.Minute
-
 	// maxCookieSize is the value length browsers are relied upon to keep, in bytes.
 	// A session that no longer fits is refused loudly, rather than silently truncated into one
 	// that never opens again.
@@ -26,22 +21,36 @@ const (
 )
 
 // session is what the sealed cookie holds between two requests.
-// The ID token is deliberately absent: it is the largest of the three and the browser has no use
-// for it here, since the profile it carries is the provider's to serve.
+//
+// It carries no lifetime of its own. How long a sign in stays good is how long the provider keeps
+// honouring the refresh token, and how quickly it stops is the issuer being asked on every
+// request. A deadline here would be this module deciding a thing the provider decides, and
+// deciding it with less to go on.
 type session struct {
 	AccessToken  string    `json:"a"`
 	RefreshToken string    `json:"r,omitempty"`
 	Expiry       time.Time `json:"e"`
-	Subject      string    `json:"s,omitempty"`
+
+	// IDToken is kept only to be handed back as the id_token_hint of an RP initiated logout, which
+	// providers ask for before honouring a post logout redirect. It is dropped when the session
+	// would otherwise outgrow a cookie.
+	IDToken string `json:"t,omitempty"`
 }
 
 // pending is what a login in flight has to remember until the provider sends the browser back.
+//
+// The state ties the callback to the login this browser started, the PKCE verifier ties the code
+// to it, and the nonce ties the ID token to it.
+//
+// It carries no expiry of its own. How long a login may take to come back is the lifetime of the
+// authorization code, which the provider sets and enforces — ten minutes at most by RFC 6749, and
+// single use. A deadline here would be a second opinion on a question the authority already
+// answers, and the answer we would be second-guessing is the one that counts.
 type pending struct {
-	State        string    `json:"s"`
-	Nonce        string    `json:"n"`
-	CodeVerifier string    `json:"v"`
-	ReturnTo     string    `json:"r,omitempty"`
-	ExpiresAt    time.Time `json:"e"`
+	State        string `json:"s"`
+	Nonce        string `json:"n"`
+	CodeVerifier string `json:"v"`
+	ReturnTo     string `json:"r,omitempty"`
 }
 
 // write seals a value into a cookie and sets it on the response.
@@ -85,22 +94,22 @@ func (f *Flow) clear(w http.ResponseWriter, name string) {
 	http.SetCookie(w, f.cookie(name, "", -1))
 }
 
-// cookie builds a cookie carrying the module's fixed protections.
+// cookie builds a cookie carrying the module's protections, none of which are negotiable.
 //
 // HttpOnly is the point of the whole package: a session JavaScript cannot read is a session an XSS
 // cannot steal. Secure keeps it off cleartext, and is only lifted for a local stack that has no
 // TLS to offer. SameSite bounds which cross-site requests carry it at all.
 func (f *Flow) cookie(name, value string, maxAge int) *http.Cookie {
-	// gosec cannot see that Secure is only ever lowered by InsecureCookies, which Config documents
-	// as a local development setting and which New logs a warning for.
-	return &http.Cookie{ //nolint:gosec // Secure is deliberate, see InsecureCookies
+	return &http.Cookie{
 		Name:     name,
 		Value:    value,
-		Path:     f.cookiePath,
-		Domain:   f.cookieDomain,
+		Path:     "/",
 		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   !f.insecureCookies,
-		SameSite: f.sameSite,
+
+		// Lax is the tightest setting the flow works under: the provider returns the browser by a
+		// top-level navigation, which Strict would strip the cookie from.
+		SameSite: http.SameSiteLaxMode,
 	}
 }

@@ -2,9 +2,13 @@
 
 Bearer token verification and role based authorization for HTTP APIs.
 
-Authentication happens at a central OIDC identity provider. This module never talks to a login
-provider, never stores a session and never sets a cookie: it validates the tokens the browser
-presents, and decides what their bearer may do.
+Authentication happens at a central OIDC identity provider, and **the provider has the last word**.
+A token is evidence, not a decision: its signature says the issuer minted it, never that the
+account still exists, that its password was not changed, or that the session was not ended
+elsewhere. So the issuer is asked whether a token is still active, through RFC 7662 introspection,
+rather than trusted until an expiry date it handed out at login. Its answer is reused for 15
+seconds, so a revocation lands in seconds without the provider sitting in front of every request.
+That constraint is what the design answers to — see `ARCHITECTURE.md`.
 
 ## What it provides
 
@@ -142,6 +146,21 @@ what keeps the endpoint from being an open redirect. `GET /auth/callback` finish
 /auth/logout` drops the session, and hands the browser on to the provider when `PostLogoutURL` is
 set. Logout is a `POST` so that a cross-site page cannot sign a visitor out by linking to it.
 
+Every login ends with the ID token being verified against the nonce it was started with, as OpenID
+Connect Core 3.1.3.7 requires, which is what ties the session to the person it names. Signing out
+hands the refresh token back to the provider where it advertises a revocation endpoint (RFC 7009),
+rather than leaving it live.
+
+A request that changes something, carrying the session cookie, must state this application's own
+origin, derived from `RedirectURL`. That is the CSRF check, and it costs the frontend nothing: no
+token to read, no header to echo. It applies only to cookie-authenticated requests, since a bearer
+token is one the caller attached on purpose. A refused request answers `403` with the code
+`cross_site`.
+
+A session carries no expiry of its own. How long a sign in stays good is how long the provider
+keeps honouring the refresh token, and how quickly it stops is the issuer being asked about the
+token. Set the session length at the provider, where it is decided.
+
 The session cookie is `HttpOnly`, `Secure` and `SameSite=Lax`, and holds the tokens sealed with
 AES-GCM — the browser can present it but never read it. `SameSite=Lax` is the tightest setting the
 flow works under, since the provider returns the browser by a top-level navigation. That leaves
@@ -238,10 +257,8 @@ algorithms are pinned to the asymmetric ones, so an issuer announcing a symmetri
 discovery document is not taken at its word.
 
 The issuer itself must be `https`, loopback aside: the module fetches the signing keys over that
-connection and forwards access tokens to the UserInfo endpoint on it, so cleartext would hand both
-to anyone on the path. A development stack whose provider answers on a container name can lift the
-rule through `verifier.Config.AllowInsecureIssuer`, which is deliberately not reachable from
-`Options` — no environment variable can turn it on.
+connection and forwards access tokens to it, so cleartext would hand both to anyone on the path.
+There is no setting that lifts this.
 
 Where roles come from the UserInfo endpoint, the subject it answers with must be the one the token
 was verified for, as OpenID Connect Core 5.3.2 requires. Otherwise the roles of whoever the
@@ -253,17 +270,40 @@ token** is rejected — recognised by the `nonce`, `at_hash` or `c_hash` an acce
 carries. An ID token is minted for the browser and states who signed in, never what its bearer may
 call.
 
+### The issuer has the last word
+
+A valid signature and an unexpired token say the issuer minted this, and when. They cannot say the
+account still exists. So the issuer is asked whether the token is still active (RFC 7662), which is
+what catches a **disabled account, a changed password, a revoked token or a session ended from
+another device** — none of which a token can report about itself.
+
+This is on by default: an issuer advertising an `introspection_endpoint` is asked, without the
+deployment having to know it should ask.
+
+-   `IntrospectionTTL` reuses the issuer's answer for that long, and defaults to **15 seconds**: a
+    revocation lands within seconds, while a busy API leaves the provider alone for nearly every
+    call. Asking on every single request would put the provider's latency and its outages in front
+    of the whole API, which is the arrangement this module exists instead of. A negative value does
+    ask every time, for a deployment that wants it. Only an `active` answer is ever cached, never a
+    refusal, and never past the token's own expiry.
+-   There is no setting that declines to ask. An issuer advertising no endpoint is not asked because
+    there is nowhere to ask, and that is logged loudly at every start: it is the one case where a
+    deleted account keeps working until its token expires.
+-   An issuer that cannot be reached is a `503`, not a denial. Not knowing whether someone is still
+    signed in is an outage; treating it as a revocation would sign everyone out on a hiccup.
+
 Three things the module deliberately does not do:
 
--   **Revocation.** A token stays valid until it expires, so a user removed at the provider keeps
-    their access for the rest of that lifetime. The access token lifetime _is_ the revocation delay:
-    keep it short at the provider, and rely on refresh for the session length.
 -   **Rate limiting.** A rejected token costs a signature verification and a log line, both driven
     by an unauthenticated caller. Put a rate limiter in front of the API, as any public endpoint
     deserves.
--   **CSRF.** In server driven mode the session is a cookie, and `SameSite=Lax` stops every
-    cross-site request but a top-level `GET`. Guarding the writes is the application's, as it is
-    for any cookie-authenticated API.
+-   **Server side session revocation.** The session cookie is sealed, not looked up, so there is no
+    list here to strike it from. There does not need to be: the issuer is asked about the token it
+    carries, so revoking at the provider stops it within seconds. Revocation lives where the
+    account does.
+-   **Back-channel logout.** The provider is asked rather than listened to. Introspection makes a
+    revocation land within seconds; a pushed logout would make it land at once, without the round
+    trip.
 -   **Anything about the browser's token storage, in bearer mode.** An SPA keeping a refresh token
     in `localStorage` hands a long-lived credential to any XSS; `sessionStorage`, or no
     `offline_access` scope at all, narrows that window. In bearer mode this module never sees those
@@ -374,12 +414,11 @@ Toolchain versions are pinned in `mise.toml`, and the same commands CI runs are 
 
 ```sh
 mise install
-mise run check   # lint and test, with and without the demo build tag
+mise run check   # everything CI runs
 mise run test
-mise run lint
-pre-commit install
+mise run vet
 ```
 
-The demo path only compiles under `authdemo`, so both the tests and the linter run twice: once for
-the shipped build, once for the demo one. `.golangci.yml` pins the linters, and CI enforces
-`gofmt`, `go vet`, `go mod tidy` and a `-race` test run on both.
+The demo path only compiles under `authdemo`, so the tests run twice: once for the shipped build,
+once for the demo one. CI runs `gofmt`, `go vet`, `go mod tidy` and a `-race` test run on both.
+

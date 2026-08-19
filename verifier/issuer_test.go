@@ -12,10 +12,9 @@ func Test_requireSecureIssuer(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name          string
-		issuerURL     string
-		allowInsecure bool
-		wantErr       string
+		name      string
+		issuerURL string
+		wantErr   string
 	}{
 		{name: "https is what a deployment is expected to use", issuerURL: "https://auth.example.com"},
 		{name: "http on localhost is a developer's own stack", issuerURL: "http://localhost:1411"},
@@ -36,18 +35,13 @@ func Test_requireSecureIssuer(t *testing.T) {
 			issuerURL: "ftp://auth.example.com",
 			wantErr:   "must be https",
 		},
-		{
-			name:          "a host may allow cleartext deliberately",
-			issuerURL:     "http://pocketid:1411",
-			allowInsecure: true,
-		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := requireSecureIssuer(c.issuerURL, c.allowInsecure)
+			err := requireSecureIssuer(c.issuerURL)
 
 			if c.wantErr == "" {
 				assert.NoError(t, err)

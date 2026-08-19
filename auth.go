@@ -61,6 +61,8 @@ func newVerified(ctx context.Context, settings Settings, selected provider.Provi
 		Audience:          settings.Audience(),
 		RolesClaim:        selected.RolesClaim(),
 		RolesFromUserInfo: selected.RolesFromUserInfo(),
+		ClientSecret:      settings.ClientSecret(),
+		IntrospectionTTL:  settings.IntrospectionTTL(),
 		Logger:            logger,
 	})
 	if err != nil {
@@ -91,14 +93,12 @@ func (a *Auth) driveBrowserFlow(settings Settings, tokenVerifier *verifier.Verif
 
 	flow, err := browser.New(browser.Config{
 		Endpoints:       tokenVerifier.Endpoints(),
+		IDTokens:        tokenVerifier,
 		ClientID:        settings.Audience(),
-		ClientSecret:    options.ClientSecret,
+		ClientSecret:    settings.ClientSecret(),
 		RedirectURL:     options.RedirectURL,
 		Scopes:          selected.Scopes(),
 		Secret:          options.Secret,
-		CookiePath:      options.CookiePath,
-		CookieDomain:    options.CookieDomain,
-		SameSite:        options.SameSite,
 		InsecureCookies: options.InsecureCookies,
 		PostLoginPath:   options.PostLoginPath,
 		PostLogoutURL:   options.PostLogoutURL,

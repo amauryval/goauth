@@ -72,7 +72,11 @@ func (s *sealer) seal(purpose string, payload []byte) (string, error) {
 // Every failure reads the same, since a cookie that does not open is a cookie the caller has no
 // business hearing about: tampered, stale, or sealed by a server holding another secret.
 func (s *sealer) open(purpose, value string) ([]byte, error) {
-	sealed, err := base64.RawURLEncoding.DecodeString(value)
+	// Strict decoding refuses the non canonical spellings base64 otherwise tolerates: the trailing
+	// character carries unused bits, so several strings decode to the same bytes. Nothing forges a
+	// cookie that way, but it lets one be rewritten into an equivalent the server still accepts,
+	// and a value that only has one spelling is one less thing to reason about.
+	sealed, err := base64.RawURLEncoding.Strict().DecodeString(value)
 	if err != nil {
 		return nil, errCookie
 	}

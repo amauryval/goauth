@@ -25,10 +25,6 @@ const (
 // It is what removes the OIDC client, the PKCE dance and the token storage from the frontend, and
 // with them the XSS exposure a token kept in localStorage carries.
 type BrowserOptions struct {
-	// ClientSecret authenticates this application at the token endpoint, empty for a public client
-	// where PKCE alone proves the exchange.
-	ClientSecret string
-
 	// RedirectURL is the absolute URL the provider sends the browser back to. It must be
 	// registered there, and must resolve to CallbackPath on this application.
 	RedirectURL string
@@ -43,14 +39,6 @@ type BrowserOptions struct {
 	// PostLogoutURL is where the provider sends the browser after signing out. Left empty the
 	// browser is not sent to the provider at all, and only the session is dropped.
 	PostLogoutURL string
-
-	// CookiePath and CookieDomain scope the session cookie, defaulting to "/" and to the serving
-	// host.
-	CookiePath   string
-	CookieDomain string
-
-	// SameSite bounds which cross-site requests carry the session, defaulting to Lax.
-	SameSite http.SameSite
 
 	// InsecureCookies drops the Secure attribute, for a local stack served over http.
 	// It must never be set on a deployment: the session then travels in cleartext.
@@ -72,6 +60,11 @@ func (s browserSource) Token(w http.ResponseWriter, r *http.Request) string {
 	}
 
 	return bearerToken(r)
+}
+
+// Allow refuses a state changing request that another site made on the visitor's behalf.
+func (s browserSource) Allow(r *http.Request) bool {
+	return s.flow.Allow(r)
 }
 
 // LoginHandler starts a sign in, redirecting the browser to the provider.

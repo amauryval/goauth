@@ -172,3 +172,71 @@ func Test_require_NilUser(t *testing.T) {
 		})
 	}
 }
+
+// crossSiteSource stands in for a cookie based token source that refuses a request.
+type crossSiteSource struct{ allow bool }
+
+func (s crossSiteSource) Token(http.ResponseWriter, *http.Request) string { return "a-token" }
+
+func (s crossSiteSource) Allow(*http.Request) bool { return s.allow }
+
+// Test_require_RequestGuard pins that a token source refusing a request stops it before any
+// verification, and that a source with no opinion changes nothing.
+func Test_require_RequestGuard(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		source    TokenSource
+		wantCode  int
+		wantError string
+	}{
+		{
+			name:      "a guard refusing the request",
+			source:    crossSiteSource{allow: false},
+			wantCode:  http.StatusForbidden,
+			wantError: "cross_site",
+		},
+		{
+			name:     "a guard allowing the request",
+			source:   crossSiteSource{allow: true},
+			wantCode: http.StatusOK,
+		},
+		{
+			name:     "a source with no opinion",
+			source:   bearerSource{},
+			wantCode: http.StatusOK,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			verifier := &mock.Verifier{Info: types.SessionInfo{
+				LoggedIn:   true,
+				Authorized: true,
+				Roles:      []types.Role{types.RoleAdmin},
+				User:       mock.SetupMockUser(),
+			}}
+
+			auth, err := NewWithVerifier(verifier, nil)
+			require.NoError(t, err)
+
+			auth.tokens = c.source
+
+			recorder := httptest.NewRecorder()
+			guarded := auth.RequireRoles(types.RoleAdmin)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			guarded.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/skills", nil))
+
+			assert.Equal(t, c.wantCode, recorder.Code)
+
+			if c.wantError != "" {
+				assert.Contains(t, recorder.Body.String(), c.wantError)
+				assert.Empty(t, verifier.ReceivedToken, "a refused request must not reach verification")
+			}
+		})
+	}
+}

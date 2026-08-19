@@ -92,6 +92,10 @@ Things worth knowing:
     frontend has to track expiry.
 -   **The session cookie is `HttpOnly`.** JavaScript cannot read it, which is the point: there is
     nothing on the page for an XSS to steal. Do not look for it in `document.cookie`.
+-   **A session can end at any moment.** It ends when the provider stops standing behind it: an
+    account disabled, a password changed, a session closed from another device, or the refresh
+    simply running out. The provider is asked about the token, so this lands within seconds. Expect
+    a `401` mid-session at any time, and send the visitor back through `/auth/login` when it does.
 
 ### Signing out
 
@@ -116,13 +120,16 @@ top-level navigation that is still a `POST` — which is what a form is for:
 
 If you are unsure which the deployment does, the form works in both cases.
 
-### CSRF
+### CSRF: nothing to do
 
-The session is a cookie, and `SameSite=Lax` keeps it off every cross-site request but a top-level
-`GET`. That leaves the writes to the application, as with any cookie-authenticated API. Sending
-`Content-Type: application/json` is already most of the way there: an HTML form cannot produce that
-header, so a form post from another site cannot reach a handler that requires it. Reject requests
-that do not carry it.
+The module checks it for you, by origin. A request that changes something and carries the session
+must come from this application, which the browser states on its own — there is no token to read
+and no header to echo back.
+
+This means the frontend has to be served from the same origin as the API. A page elsewhere cannot
+spend the session, which is the point, and this module does no CORS to make it possible.
+
+A request refused by the check answers `403` with `{"error": "cross_site"}`.
 
 ## Browser driven login (`server_flow: false`)
 
@@ -198,13 +205,15 @@ show the sentence, and never parse the sentence:
 | ------ | -------------- | ------------------------------------------------- | ------------------------------------------------- |
 | `401`  | `unauthorized` | No token, or one that no longer verifies.         | Start a login again.                              |
 | `403`  | `forbidden`    | Signed in, but not allowed to do this.            | Say so. Do **not** send them to login.            |
+| `403`  | `cross_site`   | The request did not come from this application.   | A deployment setting is wrong. Report it.         |
 | `503`  | `unavailable`  | Authorization could not be evaluated. Transient.  | Retry with a backoff. Keep the session as it was. |
 
 The `401`/`403` distinction is the same trap as the session states: a `403` never means "sign in
 again", and treating it that way sends the visitor around a loop that cannot end.
 
-A `401` mid-session, in server driven mode, means the session could not be renewed — the refresh
-token expired or was revoked at the provider. Send the visitor back through `/auth/login`.
+A `401` mid-session means the provider no longer stands behind the session: the token was revoked,
+the account disabled, the password changed, or the refresh simply ran out. Send the visitor back
+through `/auth/login`, which is the one response that fits all of them.
 
 ## Checklist
 

@@ -78,11 +78,18 @@ func Test_sealer(t *testing.T) {
 		sealed, err := sealer.seal(sessionPurpose, []byte("a-token"))
 		require.NoError(t, err)
 
-		tampered := sealed[:len(sealed)-1] + string(flip(sealed[len(sealed)-1]))
+		// Every position is tampered with in turn, rather than one: the last base64 character
+		// carries unused bits, so changing it alone can decode to the very same bytes.
+		for at := range sealed {
+			tampered := sealed[:at] + string(flip(sealed[at])) + sealed[at+1:]
+			if tampered == sealed {
+				continue
+			}
 
-		_, err = sealer.open(sessionPurpose, tampered)
+			_, err := sealer.open(sessionPurpose, tampered)
 
-		assert.ErrorIs(t, err, errCookie)
+			assert.ErrorIs(t, err, errCookie, "tampering at %d must be caught", at)
+		}
 	})
 
 	t.Run("nonsense does not open", func(t *testing.T) {

@@ -1,7 +1,9 @@
 package browser
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,6 +18,26 @@ import (
 )
 
 const testSecret = "a-secret-of-at-least-thirty-two-bytes"
+
+// stubIDTokens stands in for the real ID token verification, which needs an issuer to sign with.
+// It records the nonce it was handed, so a test can assert the token was tied to its login.
+type stubIDTokens struct {
+	err           error
+	seenRawToken  string
+	seenNonce     string
+	rejectOnNonce bool
+}
+
+func (s *stubIDTokens) VerifyIDToken(_ context.Context, rawIDToken, nonce string) error {
+	s.seenRawToken = rawIDToken
+	s.seenNonce = nonce
+
+	if s.rejectOnNonce && rawIDToken == "" {
+		return errors.New("the provider returned no id token")
+	}
+
+	return s.err
+}
 
 // setupIssuer starts a provider whose token endpoint mints the tokens the test asks for, and
 // records the exchange it was sent.
@@ -48,7 +70,6 @@ func setupFlow(t *testing.T, server *httptest.Server, adjust func(*Config)) *Flo
 
 	config := Config{
 		Endpoints: verifier.Endpoints{
-			Issuer:        server.URL,
 			Authorization: server.URL + "/authorize",
 			Token:         server.URL + "/token",
 		},
@@ -56,6 +77,7 @@ func setupFlow(t *testing.T, server *httptest.Server, adjust func(*Config)) *Flo
 		RedirectURL: "https://app.example.com/auth/callback",
 		Scopes:      []string{"openid", "offline_access"},
 		Secret:      []byte(testSecret),
+		IDTokens:    &stubIDTokens{},
 	}
 
 	if adjust != nil {
@@ -118,6 +140,11 @@ func Test_New(t *testing.T) {
 			wantErr: "redirect URL is required",
 		},
 		{
+			name:    "no id token verification is refused",
+			adjust:  func(c *Config) { c.IDTokens = nil },
+			wantErr: "id token verifier is required",
+		},
+		{
 			name:    "an absolute post login destination is refused",
 			adjust:  func(c *Config) { c.PostLoginPath = "https://evil.example.com" },
 			wantErr: "path on this application",
@@ -138,6 +165,7 @@ func Test_New(t *testing.T) {
 				ClientID:    "portfolio",
 				RedirectURL: "https://app.example.com/auth/callback",
 				Secret:      []byte(testSecret),
+				IDTokens:    &stubIDTokens{},
 			}
 
 			if c.adjust != nil {
@@ -214,11 +242,11 @@ func Test_Flow_LoginHandler_ReturnTo(t *testing.T) {
 				query = "?return_to=" + url.QueryEscape(c.returnTo)
 			}
 
-			target, pendingCookie := login(t, flow, query)
+			target, loginCookie := login(t, flow, query)
 
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/auth/callback?code=a-code&state="+url.QueryEscape(target.Query().Get("state")), nil)
-			request.AddCookie(pendingCookie)
+			request.AddCookie(loginCookie)
 
 			flow.CallbackHandler()(recorder, request)
 
@@ -241,11 +269,11 @@ func Test_Flow_CallbackHandler(t *testing.T) {
 	server, exchanged := setupIssuer(t, response)
 	flow := setupFlow(t, server, nil)
 
-	target, pendingCookie := login(t, flow, "")
+	target, loginCookie := login(t, flow, "")
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/auth/callback?code=a-code&state="+url.QueryEscape(target.Query().Get("state")), nil)
-	request.AddCookie(pendingCookie)
+	request.AddCookie(loginCookie)
 
 	flow.CallbackHandler()(recorder, request)
 
@@ -257,11 +285,11 @@ func Test_Flow_CallbackHandler(t *testing.T) {
 	var session, cleared *http.Cookie
 
 	for _, cookie := range recorder.Result().Cookies() {
-		if cookie.Name == DefaultSessionCookie {
+		if cookie.Name == sessionCookie {
 			session = cookie
 		}
 
-		if cookie.Name == DefaultPendingCookie {
+		if cookie.Name == pendingCookie {
 			cleared = cookie
 		}
 	}
@@ -320,7 +348,7 @@ func Test_Flow_CallbackHandler_Rejections(t *testing.T) {
 			server, _ := setupIssuer(t, map[string]any{"access_token": "an-access-token", "token_type": "Bearer"})
 			flow := setupFlow(t, server, nil)
 
-			target, pendingCookie := login(t, flow, "")
+			target, loginCookie := login(t, flow, "")
 
 			state := c.state
 			if c.query != "" {
@@ -331,7 +359,7 @@ func Test_Flow_CallbackHandler_Rejections(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/auth/callback?code=a-code&state="+url.QueryEscape(state)+c.query, nil)
 
 			if c.withCookie {
-				request.AddCookie(pendingCookie)
+				request.AddCookie(loginCookie)
 			}
 
 			flow.CallbackHandler()(recorder, request)
@@ -339,7 +367,7 @@ func Test_Flow_CallbackHandler_Rejections(t *testing.T) {
 			assert.Equal(t, c.wantCode, recorder.Code)
 
 			for _, cookie := range recorder.Result().Cookies() {
-				if cookie.Name == DefaultSessionCookie {
+				if cookie.Name == sessionCookie {
 					assert.Negative(t, cookie.MaxAge, "no session may be established")
 				}
 			}
@@ -356,23 +384,23 @@ func Test_Flow_CallbackHandler_ForeignCookie(t *testing.T) {
 	flow := setupFlow(t, server, nil)
 	other := setupFlow(t, server, func(c *Config) { c.Secret = []byte("another-secret-of-thirty-two-plus-bytes") })
 
-	_, pendingCookie := login(t, flow, "")
+	_, loginCookie := login(t, flow, "")
 
 	t.Run("a cookie sealed with another secret does not open", func(t *testing.T) {
 		t.Parallel()
 
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
-		request.AddCookie(pendingCookie)
+		request.AddCookie(loginCookie)
 
 		var started pending
-		assert.False(t, other.read(request, other.pendingCookie, pendingPurpose, &started))
+		assert.False(t, other.read(request, pendingCookie, pendingPurpose, &started))
 	})
 
 	t.Run("a pending cookie cannot be replayed as a session", func(t *testing.T) {
 		t.Parallel()
 
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
-		request.AddCookie(&http.Cookie{Name: DefaultSessionCookie, Value: pendingCookie.Value})
+		request.AddCookie(&http.Cookie{Name: sessionCookie, Value: loginCookie.Value})
 
 		assert.Empty(t, flow.Token(httptest.NewRecorder(), request))
 	})
@@ -388,7 +416,7 @@ func Test_Flow_Token(t *testing.T) {
 		flow := setupFlow(t, server, nil)
 
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
-		request.AddCookie(sessionCookie(t, flow, session{AccessToken: "an-access-token", Expiry: time.Now().Add(time.Hour)}))
+		request.AddCookie(sealedSession(t, flow, session{AccessToken: "an-access-token", Expiry: time.Now().Add(time.Hour)}))
 
 		assert.Equal(t, "an-access-token", flow.Token(httptest.NewRecorder(), request))
 	})
@@ -409,7 +437,7 @@ func Test_Flow_Token(t *testing.T) {
 		flow := setupFlow(t, server, nil)
 
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
-		request.AddCookie(sessionCookie(t, flow, session{AccessToken: "a-spent-token", Expiry: time.Now().Add(-time.Hour)}))
+		request.AddCookie(sealedSession(t, flow, session{AccessToken: "a-spent-token", Expiry: time.Now().Add(-time.Hour)}))
 
 		recorder := httptest.NewRecorder()
 
@@ -426,7 +454,7 @@ func Test_Flow_Token(t *testing.T) {
 		flow := setupFlow(t, server, nil)
 
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
-		request.AddCookie(sessionCookie(t, flow, session{
+		request.AddCookie(sealedSession(t, flow, session{
 			AccessToken:  "a-spent-token",
 			RefreshToken: "a-refresh-token",
 			Expiry:       time.Now().Add(-time.Minute),
@@ -439,7 +467,7 @@ func Test_Flow_Token(t *testing.T) {
 		assert.Equal(t, "a-refresh-token", spent.Get("refresh_token"))
 
 		renewed := recorder.Result().Cookies()[0]
-		assert.Positive(t, renewed.MaxAge)
+		assert.Zero(t, renewed.MaxAge, "a session the provider can renew carries no expiry of ours")
 		assert.NotContains(t, renewed.Value, "a-renewed-token")
 	})
 
@@ -450,7 +478,7 @@ func Test_Flow_Token(t *testing.T) {
 		flow := setupFlow(t, server, nil)
 
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
-		request.AddCookie(sessionCookie(t, flow, session{
+		request.AddCookie(sealedSession(t, flow, session{
 			AccessToken:  "a-spent-token",
 			RefreshToken: "a-revoked-refresh-token",
 			Expiry:       time.Now().Add(-time.Minute),
@@ -506,11 +534,205 @@ func Test_Flow_LogoutHandler(t *testing.T) {
 }
 
 // sessionCookie seals a session the way the flow itself would, for a test starting from one.
-func sessionCookie(t *testing.T, flow *Flow, value session) *http.Cookie {
+func sealedSession(t *testing.T, flow *Flow, value session) *http.Cookie {
 	t.Helper()
 
 	recorder := httptest.NewRecorder()
-	require.NoError(t, flow.write(recorder, flow.sessionCookie, sessionPurpose, value, time.Hour))
+	require.NoError(t, flow.write(recorder, sessionCookie, sessionPurpose, value, time.Hour))
 
 	return recorder.Result().Cookies()[0]
+}
+
+// readSession opens the session cookie a response set, as the flow itself would.
+func readSession(t *testing.T, flow *Flow, recorder *httptest.ResponseRecorder) session {
+	t.Helper()
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == sessionCookie {
+			request.AddCookie(cookie)
+		}
+	}
+
+	var opened session
+	require.True(t, flow.read(request, sessionCookie, sessionPurpose, &opened))
+
+	return opened
+}
+
+// Test_Flow_CallbackHandler_IDToken pins OpenID Connect Core 3.1.3.7: the ID token the exchange
+// returned is verified against the nonce this login was started with, and a login that fails that
+// check establishes nothing.
+func Test_Flow_CallbackHandler_IDToken(t *testing.T) {
+	t.Parallel()
+
+	exchange := map[string]any{
+		"access_token": "an-access-token",
+		"id_token":     "an-id-token",
+		"token_type":   "Bearer",
+		"expires_in":   3600,
+	}
+
+	t.Run("the id token is checked against this login's nonce", func(t *testing.T) {
+		t.Parallel()
+
+		idTokens := &stubIDTokens{}
+
+		server, _ := setupIssuer(t, exchange)
+		flow := setupFlow(t, server, func(c *Config) { c.IDTokens = idTokens })
+
+		recorder := completeLogin(t, flow)
+		require.Equal(t, http.StatusFound, recorder.Code)
+
+		assert.Equal(t, "an-id-token", idTokens.seenRawToken)
+		assert.NotEmpty(t, idTokens.seenNonce, "the nonce must be carried from the login to the check")
+
+		established := readSession(t, flow, recorder)
+		assert.Equal(t, "an-id-token", established.IDToken, "kept only as the logout hint")
+	})
+
+	t.Run("a rejected id token establishes no session", func(t *testing.T) {
+		t.Parallel()
+
+		idTokens := &stubIDTokens{err: errors.New("the id token does not belong to this login")}
+
+		server, _ := setupIssuer(t, exchange)
+		flow := setupFlow(t, server, func(c *Config) { c.IDTokens = idTokens })
+
+		recorder := completeLogin(t, flow)
+
+		assert.Equal(t, http.StatusForbidden, recorder.Code)
+
+		for _, cookie := range recorder.Result().Cookies() {
+			if cookie.Name == sessionCookie {
+				assert.Negative(t, cookie.MaxAge, "no session may survive a failed id token check")
+			}
+		}
+	})
+
+	t.Run("a provider returning no id token is refused", func(t *testing.T) {
+		t.Parallel()
+
+		idTokens := &stubIDTokens{rejectOnNonce: true}
+
+		server, _ := setupIssuer(t, map[string]any{"access_token": "an-access-token", "token_type": "Bearer"})
+		flow := setupFlow(t, server, func(c *Config) { c.IDTokens = idTokens })
+
+		assert.Equal(t, http.StatusForbidden, completeLogin(t, flow).Code)
+	})
+}
+
+// Test_Flow_LogoutHandler_Revocation pins RFC 7009: the refresh token is handed back rather than
+// left live at the provider, and an issuer advertising no endpoint is not a failure.
+func Test_Flow_LogoutHandler_Revocation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the refresh token is revoked", func(t *testing.T) {
+		t.Parallel()
+
+		var revoked url.Values
+
+		server, _ := setupIssuer(t, nil)
+		revocation := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+
+			revoked = r.PostForm
+
+			w.WriteHeader(http.StatusOK)
+		}))
+		t.Cleanup(revocation.Close)
+
+		flow := setupFlow(t, server, func(c *Config) { c.Endpoints.Revocation = revocation.URL })
+
+		request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		request.AddCookie(sealedSession(t, flow, session{
+			AccessToken:  "an-access-token",
+			RefreshToken: "a-refresh-token",
+		}))
+
+		recorder := httptest.NewRecorder()
+		flow.LogoutHandler()(recorder, request)
+
+		assert.Equal(t, http.StatusNoContent, recorder.Code)
+		assert.Equal(t, "a-refresh-token", revoked.Get("token"))
+		assert.Equal(t, "refresh_token", revoked.Get("token_type_hint"))
+	})
+
+	t.Run("an issuer advertising no revocation is not a failure", func(t *testing.T) {
+		t.Parallel()
+
+		server, _ := setupIssuer(t, nil)
+		flow := setupFlow(t, server, nil)
+
+		request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		request.AddCookie(sealedSession(t, flow, session{RefreshToken: "a-refresh-token"}))
+
+		recorder := httptest.NewRecorder()
+		flow.LogoutHandler()(recorder, request)
+
+		assert.Equal(t, http.StatusNoContent, recorder.Code)
+	})
+
+	t.Run("a refusal to revoke still ends the session", func(t *testing.T) {
+		t.Parallel()
+
+		server, _ := setupIssuer(t, nil)
+		revocation := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+		}))
+		t.Cleanup(revocation.Close)
+
+		flow := setupFlow(t, server, func(c *Config) { c.Endpoints.Revocation = revocation.URL })
+
+		request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		request.AddCookie(sealedSession(t, flow, session{RefreshToken: "a-refresh-token"}))
+
+		recorder := httptest.NewRecorder()
+		flow.LogoutHandler()(recorder, request)
+
+		assert.Equal(t, http.StatusNoContent, recorder.Code)
+
+		for _, cookie := range recorder.Result().Cookies() {
+			assert.Negative(t, cookie.MaxAge)
+		}
+	})
+
+	t.Run("the id token is handed back as the logout hint", func(t *testing.T) {
+		t.Parallel()
+
+		server, _ := setupIssuer(t, nil)
+		flow := setupFlow(t, server, func(c *Config) {
+			c.Endpoints.EndSession = server.URL + "/end-session"
+			c.PostLogoutURL = "https://app.example.com/"
+		})
+
+		request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		request.AddCookie(sealedSession(t, flow, session{IDToken: "an-id-token"}))
+
+		recorder := httptest.NewRecorder()
+		flow.LogoutHandler()(recorder, request)
+
+		require.Equal(t, http.StatusFound, recorder.Code)
+
+		target, err := url.Parse(recorder.Header().Get("Location"))
+		require.NoError(t, err)
+
+		assert.Equal(t, "an-id-token", target.Query().Get("id_token_hint"))
+	})
+}
+
+// completeLogin walks a login from start to callback and returns the callback's response.
+func completeLogin(t *testing.T, flow *Flow) *httptest.ResponseRecorder {
+	t.Helper()
+
+	target, loginCookie := login(t, flow, "")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/auth/callback?code=a-code&state="+url.QueryEscape(target.Query().Get("state")), nil)
+	request.AddCookie(loginCookie)
+
+	flow.CallbackHandler()(recorder, request)
+
+	return recorder
 }

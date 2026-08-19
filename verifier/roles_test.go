@@ -232,7 +232,9 @@ func setupCountingIssuer(t *testing.T, status int, claims map[string]any) (*http
 	return server, key, &calls
 }
 
-// setupUserInfoVerifier builds a verifier reading its roles from the UserInfo endpoint.
+// setupUserInfoVerifier builds a verifier reading its roles from the UserInfo endpoint, holding
+// them for the given TTL. The cache is replaced rather than configured: how long a lookup is
+// reused is the package's decision, not a deployment's, so only a test states another value.
 func setupUserInfoVerifier(t *testing.T, issuerURL string, ttl time.Duration) *Verifier {
 	t.Helper()
 
@@ -241,30 +243,40 @@ func setupUserInfoVerifier(t *testing.T, issuerURL string, ttl time.Duration) *V
 		Audience:          testAudience,
 		RolesClaim:        "groups",
 		RolesFromUserInfo: true,
-		UserInfoTTL:       ttl,
 	})
 	require.NoError(t, err)
+
+	built.roles = newRoleCache(ttl, maxCachedUserInfo)
 
 	return built
 }
 
-// Test_Verifier_Verify_UserInfoUnavailable pins the difference between a rejected caller and an
-// unreachable provider: a UserInfo outage must not silently strip the user of every role, which
-// would answer an outage with a 403 and read as a permission bug.
+// Test_Verifier_Verify_UserInfoUnavailable pins that a UserInfo lookup is a roles lookup and
+// nothing more: every way it fails is an outage.
+//
+// It is deliberately not where "is this token still good" is decided. That question has an answer
+// in the protocol — introspection — rather than in the status code of a request made for another
+// purpose.
 func Test_Verifier_Verify_UserInfoUnavailable(t *testing.T) {
 	t.Parallel()
 
-	server, key, calls := setupCountingIssuer(t, http.StatusInternalServerError, nil)
-	built := setupUserInfoVerifier(t, server.URL, 0)
+	for _, status := range []int{http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusUnauthorized} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
 
-	claims := setupClaims(server.URL, testAudience, "some-subject", time.Now().Add(time.Hour))
+			server, key, calls := setupCountingIssuer(t, status, nil)
+			built := setupUserInfoVerifier(t, server.URL, 0)
 
-	info, err := built.Verify(context.Background(), setupSignedToken(t, key, claims))
+			claims := setupClaims(server.URL, testAudience, "some-subject", time.Now().Add(time.Hour))
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, types.ErrAuthorization)
-	assert.Equal(t, types.SessionInfo{}, info)
-	assert.Positive(t, calls.Load())
+			info, err := built.Verify(context.Background(), setupSignedToken(t, key, claims))
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, types.ErrAuthorization)
+			assert.Equal(t, types.SessionInfo{}, info)
+			assert.Positive(t, calls.Load())
+		})
+	}
 }
 
 // Test_Verifier_Verify_UserInfoNotCachedOnFailure keeps a failed lookup out of the cache, so a

@@ -27,6 +27,15 @@ type TokenSource interface {
 	Token(w http.ResponseWriter, r *http.Request) string
 }
 
+// RequestGuard rules on a request before it is authenticated at all.
+//
+// A TokenSource that authenticates by cookie implements it to answer the request forgery a cookie
+// brings with it. One that reads a header does not need to: a credential the caller had to attach
+// deliberately cannot be attached by another site.
+type RequestGuard interface {
+	Allow(r *http.Request) bool
+}
+
 // bearerSource reads the token a client presents in the Authorization header.
 type bearerSource struct{}
 
@@ -54,6 +63,12 @@ func (a *Auth) require(roles []types.Role, holds func(granted, required []types.
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			varyOnAuthorization(w)
+
+			if !a.allow(r) {
+				respondCrossSite(w)
+
+				return
+			}
 
 			info, err := a.verifier.Verify(r.Context(), a.tokens.Token(w, r))
 			if errors.Is(err, types.ErrAuthorization) {
@@ -93,6 +108,13 @@ func (a *Auth) require(roles []types.Role, holds func(granted, required []types.
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, info.User)))
 		})
 	}
+}
+
+// allow asks the token source whether the request may proceed, where it has an opinion.
+func (a *Auth) allow(r *http.Request) bool {
+	guard, guards := a.tokens.(RequestGuard)
+
+	return !guards || guard.Allow(r)
 }
 
 // userID names the user a log line is about, for a SessionInfo that may carry none.
@@ -177,6 +199,12 @@ func respondUnauthorized(w http.ResponseWriter) {
 // respondForbidden writes a generic 403 response for an authenticated user missing a role.
 func respondForbidden(w http.ResponseWriter) {
 	respondStatus(w, http.StatusForbidden, "forbidden", "this account is not allowed to perform this request")
+}
+
+// respondCrossSite writes a 403 for a state changing request another site made on the visitor's
+// behalf, carrying a session cookie the browser attached on its own.
+func respondCrossSite(w http.ResponseWriter) {
+	respondStatus(w, http.StatusForbidden, "cross_site", "this request did not come from this application")
 }
 
 // respondUnavailable writes a 503 response when the policy could not be evaluated.

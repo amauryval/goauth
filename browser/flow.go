@@ -18,12 +18,23 @@ import (
 	"github.com/amauryval/goauth/verifier"
 )
 
-const (
-	// DefaultSessionCookie is the cookie an established session is kept in.
-	DefaultSessionCookie = "goauth_session"
+// IDTokenVerifier validates the ID token a code exchange returned, and reads who it names.
+// It is an interface so that the flow can be tested without an issuer, and satisfied by
+// *verifier.Verifier.
+type IDTokenVerifier interface {
+	VerifyIDToken(ctx context.Context, rawIDToken, nonce string) error
+}
 
-	// DefaultPendingCookie is the cookie a login in flight is kept in.
-	DefaultPendingCookie = "goauth_login"
+const (
+	// sessionCookie is the cookie an established session is kept in.
+	sessionCookie = "goauth_session"
+
+	// pendingCookie is the cookie a login in flight is kept in.
+	pendingCookie = "goauth_login"
+
+	// providerTimeout bounds a request to the provider, for the code exchange, the refresh and the
+	// revocation. http.DefaultClient has none at all.
+	providerTimeout = 10 * time.Second
 
 	// refreshWindow is how long before its expiry an access token is refreshed.
 	// Refreshing on the exact second would have a token expire between the check and the call it
@@ -56,20 +67,6 @@ type Config struct {
 	// its holder mint sessions, so it belongs wherever the deployment keeps its other secrets.
 	Secret []byte
 
-	// SessionCookie and PendingCookie name the two cookies, defaulting to DefaultSessionCookie
-	// and DefaultPendingCookie.
-	SessionCookie string
-	PendingCookie string
-
-	// CookiePath and CookieDomain scope the cookies, defaulting to "/" and to the serving host.
-	CookiePath   string
-	CookieDomain string
-
-	// SameSite bounds which cross-site requests carry the session, defaulting to Lax.
-	// Lax is the tightest setting the flow works under: the provider sends the browser back by a
-	// top-level navigation, which Strict would strip the cookie from.
-	SameSite http.SameSite
-
 	// InsecureCookies drops the Secure attribute, for a local stack served over http.
 	// It must never be set on a deployment: the session then travels in cleartext.
 	InsecureCookies bool
@@ -82,6 +79,11 @@ type Config struct {
 	// Left empty the browser is not sent to the provider at all, and only the session is dropped.
 	PostLogoutURL string
 
+	// IDTokens validates the ID token the code exchange returns, as OpenID Connect Core 3.1.3.7
+	// requires. It is required: a login whose ID token cannot be checked is a login this module
+	// has no way to tie to the person it claims.
+	IDTokens IDTokenVerifier
+
 	// Logger receives the flow's failures. Defaults to types.DiscardLogger.
 	Logger types.Logger
 }
@@ -90,18 +92,14 @@ type Config struct {
 // browser to the rest of the module.
 //
 // About CSRF: the session rides in a cookie, so a cross-site request can carry it. SameSite=Lax
-// keeps it off every cross-site request but a top-level navigation, which leaves cross-site GET.
-// Guard the writes as any cookie-authenticated API must: this module's middleware protects who may
-// call, never that the caller meant to. An API accepting only application/json is already beyond
-// the reach of a form post.
+// keeps it off every cross-site request but a top-level navigation, and Allow refuses the writes
+// among those, so a page elsewhere can neither read the session nor spend it.
 type Flow struct {
 	oauth2          oauth2.Config
+	idTokens        IDTokenVerifier
+	origin          string
+	revocationURL   string
 	sealer          *sealer
-	sessionCookie   string
-	pendingCookie   string
-	cookiePath      string
-	cookieDomain    string
-	sameSite        http.SameSite
 	insecureCookies bool
 	postLoginPath   string
 	postLogoutURL   string
@@ -121,6 +119,10 @@ func New(config Config) (*Flow, error) {
 
 	if config.Endpoints.Authorization == "" || config.Endpoints.Token == "" {
 		return nil, errors.New("the issuer endpoints are required")
+	}
+
+	if config.IDTokens == nil {
+		return nil, errors.New("an id token verifier is required")
 	}
 
 	sealer, err := newSealer(config.Secret)
@@ -153,12 +155,10 @@ func New(config Config) (*Flow, error) {
 				TokenURL: config.Endpoints.Token,
 			},
 		},
+		idTokens:        config.IDTokens,
+		origin:          originOf(config.RedirectURL),
+		revocationURL:   config.Endpoints.Revocation,
 		sealer:          sealer,
-		sessionCookie:   orDefault(config.SessionCookie, DefaultSessionCookie),
-		pendingCookie:   orDefault(config.PendingCookie, DefaultPendingCookie),
-		cookiePath:      orDefault(config.CookiePath, "/"),
-		cookieDomain:    config.CookieDomain,
-		sameSite:        orSameSite(config.SameSite),
 		insecureCookies: config.InsecureCookies,
 		postLoginPath:   postLogin,
 		postLogoutURL:   config.PostLogoutURL,
@@ -171,15 +171,6 @@ func New(config Config) (*Flow, error) {
 func orDefault(value, fallback string) string {
 	if value == "" {
 		return fallback
-	}
-
-	return value
-}
-
-// orSameSite returns the configured policy, or Lax, the tightest the flow works under.
-func orSameSite(value http.SameSite) http.SameSite {
-	if value == 0 {
-		return http.SameSiteLaxMode
 	}
 
 	return value
@@ -228,5 +219,11 @@ func codeChallenge(codeVerifier string) string {
 
 // exchange turns an authorization code into tokens, proving the exchange with the code verifier.
 func (f *Flow) exchange(ctx context.Context, code, codeVerifier string) (*oauth2.Token, error) {
-	return f.oauth2.Exchange(ctx, code, oauth2.VerifierOption(codeVerifier))
+	return f.oauth2.Exchange(f.providerContext(ctx), code, oauth2.VerifierOption(codeVerifier))
+}
+
+// providerContext carries the bounded HTTP client every request to the provider goes through,
+// http.DefaultClient having no timeout of its own.
+func (f *Flow) providerContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Timeout: providerTimeout})
 }
