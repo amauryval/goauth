@@ -11,11 +11,29 @@ import (
 	"github.com/amauryval/goauth/types"
 )
 
-// bearerPrefix is the scheme expected in the Authorization header.
-const bearerPrefix = "Bearer "
+// bearerScheme is the authentication scheme expected in the Authorization header.
+// RFC 6750 makes it case insensitive, and clients do spell it "bearer".
+const bearerScheme = "bearer"
 
 // userContextKey carries the authenticated user across the request context.
 type userContextKey struct{}
+
+// TokenSource hands over the access token of the calling browser or client.
+//
+// It takes the response because a source may renew the token it returns, and has to seal the
+// renewed session back before anything is written. The default reads the Authorization header and
+// ignores the response entirely.
+type TokenSource interface {
+	Token(w http.ResponseWriter, r *http.Request) string
+}
+
+// bearerSource reads the token a client presents in the Authorization header.
+type bearerSource struct{}
+
+// Token returns the bearer token of the request, empty when there is none.
+func (bearerSource) Token(_ http.ResponseWriter, r *http.Request) string {
+	return bearerToken(r)
+}
 
 // RequireRoles returns middleware requiring a valid bearer token whose user holds every role.
 // With no role given, any authorized user passes.
@@ -35,7 +53,9 @@ func (a *Auth) RequireAnyRole(roles ...types.Role) func(http.Handler) http.Handl
 func (a *Auth) require(roles []types.Role, holds func(granted, required []types.Role) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			info, err := a.verifier.Verify(r.Context(), bearerToken(r))
+			varyOnAuthorization(w)
+
+			info, err := a.verifier.Verify(r.Context(), a.tokens.Token(w, r))
 			if errors.Is(err, types.ErrAuthorization) {
 				a.logger.Error("auth: policy unavailable", "path", r.URL.Path, "error", err)
 				respondUnavailable(w)
@@ -50,8 +70,15 @@ func (a *Auth) require(roles []types.Role, holds func(granted, required []types.
 			}
 
 			if !info.Authorized {
-				a.logger.Warn("auth: user not authorized", "path", r.URL.Path, "user", info.User.ID)
+				a.logger.Warn("auth: user not authorized", "path", r.URL.Path, "user", userID(info.User))
 				respondForbidden(w)
+
+				return
+			}
+
+			if info.User == nil {
+				a.logger.Error("auth: the verifier authorized a request without a user", "path", r.URL.Path)
+				respondUnauthorized(w)
 
 				return
 			}
@@ -68,6 +95,17 @@ func (a *Auth) require(roles []types.Role, holds func(granted, required []types.
 	}
 }
 
+// userID names the user a log line is about, for a SessionInfo that may carry none.
+// TokenVerifier is an interface a host implements, and a decision to turn someone away is one it
+// may reach without ever naming them.
+func userID(user *types.UserInfo) string {
+	if user == nil {
+		return ""
+	}
+
+	return user.ID
+}
+
 // UserFrom returns the authenticated user carried by a request that passed RequireRoles.
 func UserFrom(ctx context.Context) (*types.UserInfo, bool) {
 	user, ok := ctx.Value(userContextKey{}).(*types.UserInfo)
@@ -78,13 +116,28 @@ func UserFrom(ctx context.Context) (*types.UserInfo, bool) {
 // bearerToken extracts the token from the Authorization header, empty when there is none.
 // Deciding what an empty token means is left to the verifier, so that a development
 // verifier can authorize a browser that never obtained one.
+//
+// The header is the only place it is read from: a token in a query string ends up in access logs,
+// in proxy logs and in the Referer of every link the page carries.
 func bearerToken(r *http.Request) string {
-	rawToken, found := strings.CutPrefix(r.Header.Get("Authorization"), bearerPrefix)
-	if !found {
+	scheme, rawToken, found := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !found || !strings.EqualFold(scheme, bearerScheme) {
 		return ""
 	}
 
 	return strings.TrimSpace(rawToken)
+}
+
+// varyOnAuthorization marks the response as depending on the caller's credentials.
+// Without it a shared cache is free to hand one user's response to the next caller, since the
+// requests differ only by a header it was never told to look at.
+func varyOnAuthorization(w http.ResponseWriter) {
+	w.Header().Add("Vary", "Authorization")
+}
+
+// noStore keeps a response describing the caller out of every cache along the way.
+func noStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
 }
 
 // holdsAll reports whether granted covers every required role.
@@ -115,7 +168,9 @@ func holdsAny(granted, required []types.Role) bool {
 }
 
 // respondUnauthorized writes a generic 401 response, without leaking internal details.
+// RFC 6750 has a 401 name the scheme it expects, which is how a client knows what to present.
 func respondUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", "Bearer")
 	respondStatus(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
 }
 
@@ -134,6 +189,7 @@ func respondUnavailable(w http.ResponseWriter) {
 // who may be probing.
 func respondStatus(w http.ResponseWriter, statusCode int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	noStore(w)
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(types.ErrorResponse{
 		Error:   code,

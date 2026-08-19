@@ -61,6 +61,10 @@ type Options struct {
 
 	// GuestRole is the name the provider gives the read-only role, "guest" when empty.
 	GuestRole string
+
+	// Browser asks for the login flow to be driven on the server, so the frontend never handles a
+	// token. Left nil, the browser obtains its own tokens and presents them as bearer tokens.
+	Browser *BrowserOptions
 }
 
 // Settings gathers the authentication settings of a deployment.
@@ -71,6 +75,7 @@ type Settings struct {
 	audience     string
 	adminRole    string
 	guestRole    string
+	browser      *BrowserOptions
 }
 
 // NewSettings gathers the settings of a deployment, as the host declares them.
@@ -83,6 +88,7 @@ func NewSettings(options Options) Settings {
 		audience:     options.Audience,
 		adminRole:    options.AdminRole,
 		guestRole:    options.GuestRole,
+		browser:      options.Browser,
 	}
 }
 
@@ -129,6 +135,11 @@ func (s Settings) GuestRole() string {
 	return s.guestRole
 }
 
+// Browser reports the browser flow settings, nil when the deployment asked for none.
+func (s Settings) Browser() *BrowserOptions {
+	return s.browser
+}
+
 // provider resolves the identity provider the deployment named, and demands one:
 // assuming a provider would have this module read the roles from a claim nobody fills.
 func (s Settings) provider() (provider.Provider, error) {
@@ -153,6 +164,10 @@ func (s Settings) rejectProviderSettings() error {
 
 	if s.Audience() != "" {
 		configured = append(configured, AudienceEnv)
+	}
+
+	if s.Browser() != nil {
+		configured = append(configured, "the browser login flow")
 	}
 
 	if len(configured) == 0 {

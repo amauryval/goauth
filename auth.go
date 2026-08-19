@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/amauryval/goauth/browser"
 	"github.com/amauryval/goauth/provider"
 	"github.com/amauryval/goauth/types"
 	"github.com/amauryval/goauth/verifier"
@@ -15,6 +16,8 @@ import (
 // Auth turns verified bearer tokens into authorization decisions for HTTP handlers.
 type Auth struct {
 	verifier  types.TokenVerifier
+	tokens    TokenSource
+	flow      *browser.Flow
 	logger    types.Logger
 	issuerURL string
 	audience  string
@@ -64,7 +67,55 @@ func newVerified(ctx context.Context, settings Settings, selected provider.Provi
 		return nil, err
 	}
 
-	return newAuth(tokenVerifier, logger, settings.IssuerURL(), settings.Audience(), selected.Scopes())
+	built, err := newAuth(tokenVerifier, logger, settings.IssuerURL(), settings.Audience(), selected.Scopes())
+	if err != nil {
+		return nil, err
+	}
+
+	if settings.Browser() == nil {
+		return built, nil
+	}
+
+	if err := built.driveBrowserFlow(settings, tokenVerifier, selected, logger); err != nil {
+		return nil, err
+	}
+
+	return built, nil
+}
+
+// driveBrowserFlow has the module sign users in itself, rather than verifying tokens a frontend
+// obtained on its own. The endpoints come off the verifier, which already discovered them, so
+// asking for the flow costs no second round trip to the issuer.
+func (a *Auth) driveBrowserFlow(settings Settings, tokenVerifier *verifier.Verifier, selected provider.Provider, logger types.Logger) error {
+	options := settings.Browser()
+
+	flow, err := browser.New(browser.Config{
+		Endpoints:       tokenVerifier.Endpoints(),
+		ClientID:        settings.Audience(),
+		ClientSecret:    options.ClientSecret,
+		RedirectURL:     options.RedirectURL,
+		Scopes:          selected.Scopes(),
+		Secret:          options.Secret,
+		CookiePath:      options.CookiePath,
+		CookieDomain:    options.CookieDomain,
+		SameSite:        options.SameSite,
+		InsecureCookies: options.InsecureCookies,
+		PostLoginPath:   options.PostLoginPath,
+		PostLogoutURL:   options.PostLogoutURL,
+		Logger:          logger,
+	})
+	if err != nil {
+		return err
+	}
+
+	if options.InsecureCookies {
+		logger.Warn("auth: session cookies are sent without the Secure attribute, they travel in cleartext")
+	}
+
+	a.flow = flow
+	a.tokens = browserSource{flow: flow}
+
+	return nil
 }
 
 // NewWithVerifier creates an Auth from an already built verifier.
@@ -89,6 +140,7 @@ func newAuth(tokenVerifier types.TokenVerifier, logger types.Logger, issuerURL, 
 
 	return &Auth{
 		verifier:  tokenVerifier,
+		tokens:    bearerSource{},
 		logger:    logger,
 		issuerURL: issuerURL,
 		audience:  audience,

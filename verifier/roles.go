@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -14,9 +15,12 @@ import (
 
 // tokenRoles reads the role names the provider granted, from the token itself or from the UserInfo
 // endpoint when the provider keeps them out of the access token.
-func (v *Verifier) tokenRoles(ctx context.Context, token *oidc.IDToken, rawToken string) ([]string, error) {
+//
+// The raw token goes no further than the branch that has to present it to the issuer: reading the
+// roles out of claims already verified needs the parsed token, never the credential itself.
+func (v *Verifier) tokenRoles(ctx context.Context, token *oidc.IDToken, rawToken, subject string) ([]string, error) {
 	if v.rolesFromUserInfo {
-		return v.userInfoRoles(ctx, rawToken, token.Expiry)
+		return v.userInfoRoles(ctx, rawToken, subject, token.Expiry)
 	}
 
 	var claims map[string]any
@@ -36,7 +40,7 @@ func (v *Verifier) tokenRoles(ctx context.Context, token *oidc.IDToken, rawToken
 // than once per request, and a failing lookup is an error rather than an empty role set: a user
 // stripped of every role because the provider is unreachable is a service outage, and answering
 // it with a 403 would read as a permission bug.
-func (v *Verifier) userInfoRoles(ctx context.Context, rawToken string, tokenExpiry time.Time) ([]string, error) {
+func (v *Verifier) userInfoRoles(ctx context.Context, rawToken, subject string, tokenExpiry time.Time) ([]string, error) {
 	if v.provider == nil {
 		v.logger.Error("auth: no issuer to read the roles from")
 
@@ -48,7 +52,7 @@ func (v *Verifier) userInfoRoles(ctx context.Context, rawToken string, tokenExpi
 		return roles, nil
 	}
 
-	requestCtx, cancel := context.WithTimeout(ctx, v.userInfoTimeout)
+	requestCtx, cancel := context.WithTimeout(issuerContext(ctx, v.httpClient), v.userInfoTimeout)
 	defer cancel()
 
 	info, err := v.provider.UserInfo(requestCtx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: rawToken}))
@@ -56,6 +60,15 @@ func (v *Verifier) userInfoRoles(ctx context.Context, rawToken string, tokenExpi
 		v.logger.Error("auth: userinfo request failed", "error", err)
 
 		return nil, fmt.Errorf("%w: userinfo request failed: %w", types.ErrAuthorization, err)
+	}
+
+	// OpenID Connect Core 5.3.2: the subject the endpoint answers with must be the one the token
+	// was verified for. Without this check the roles of whoever the endpoint decides to describe
+	// would be granted to the bearer, and a provider mixing two responses up would go unnoticed.
+	if info.Subject != subject {
+		v.logger.Error("auth: userinfo describes another subject", "token", subject, "userinfo", info.Subject)
+
+		return nil, errors.New("userinfo describes another subject")
 	}
 
 	var claims map[string]any

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -21,6 +22,10 @@ const (
 	// defaultUserInfoTimeout bounds a UserInfo request, so an unresponsive provider fails the
 	// request rather than holding a server goroutine for as long as the client waits.
 	defaultUserInfoTimeout = 5 * time.Second
+
+	// defaultIssuerTimeout bounds a request to the issuer when the host pins no client of its own.
+	// http.DefaultClient has no timeout at all, and it is the fallback the OIDC library uses.
+	defaultIssuerTimeout = 10 * time.Second
 
 	// maxCachedUserInfo bounds the number of cached UserInfo lookups, so an attacker presenting
 	// many valid tokens cannot grow the cache without end.
@@ -62,6 +67,21 @@ type Config struct {
 	// Ignored unless RolesFromUserInfo is set.
 	UserInfoTimeout time.Duration
 
+	// AllowInsecureIssuer accepts an http issuer that is not on loopback, which the module
+	// otherwise refuses: over cleartext an on-path attacker reads the access tokens forwarded to
+	// the UserInfo endpoint and serves a signing key set of their own.
+	//
+	// It exists for a development stack whose provider answers on a container or LAN name rather
+	// than on localhost. It is deliberately not reachable through goauth.Options, so no deployment
+	// configured by environment variables can turn it on: a host wanting it assembles its verifier
+	// itself, in code, where the choice is visible.
+	AllowInsecureIssuer bool
+
+	// HTTPClient is the client used to reach the issuer, for discovery, for the signing keys and
+	// for the UserInfo endpoint. It is where a host pins a TLS configuration, a proxy or a
+	// connection budget. Defaults to a client with a bounded timeout.
+	HTTPClient *http.Client
+
 	// Logger receives verification failures. Defaults to types.DiscardLogger.
 	Logger types.Logger
 }
@@ -69,6 +89,8 @@ type Config struct {
 // Verifier validates OIDC bearer tokens and evaluates the authorization policy on their claims.
 type Verifier struct {
 	provider          *oidc.Provider
+	httpClient        *http.Client
+	issuerURL         string
 	tokens            *oidc.IDTokenVerifier
 	authorizer        types.Authorizer
 	rolesClaim        string
@@ -100,7 +122,11 @@ func New(ctx context.Context, authorizer types.Authorizer, config Config) (*Veri
 		return nil, errors.New("a roles claim is required")
 	}
 
-	provider, err := oidc.NewProvider(ctx, config.IssuerURL)
+	if err := requireSecureIssuer(config.IssuerURL, config.AllowInsecureIssuer); err != nil {
+		return nil, err
+	}
+
+	provider, err := oidc.NewProvider(issuerContext(ctx, config.HTTPClient), config.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery failed: %w", err)
 	}
@@ -113,11 +139,26 @@ func New(ctx context.Context, authorizer types.Authorizer, config Config) (*Veri
 	return newVerifier(provider, tokens, authorizer, config), nil
 }
 
+// issuerContext carries the HTTP client every request to the issuer must go through.
+// Leaving it to http.DefaultClient would mean no timeout and no say over TLS, on the connection
+// that fetches the signing keys and carries access tokens.
+func issuerContext(ctx context.Context, client *http.Client) context.Context {
+	if client == nil {
+		client = &http.Client{Timeout: defaultIssuerTimeout}
+	}
+
+	return oidc.ClientContext(ctx, client)
+}
+
 // newVerifier assembles a Verifier from an already built token verifier.
 func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authorizer types.Authorizer, config Config) *Verifier {
 	logger := config.Logger
 	if logger == nil {
 		logger = types.DiscardLogger{}
+	}
+
+	if config.AllowInsecureIssuer {
+		logger.Warn("auth: the issuer is trusted over cleartext, access tokens and signing keys cross the network unprotected")
 	}
 
 	ttl := config.UserInfoTTL
@@ -132,6 +173,8 @@ func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authoriz
 
 	return &Verifier{
 		provider:          provider,
+		httpClient:        config.HTTPClient,
+		issuerURL:         config.IssuerURL,
 		tokens:            tokens,
 		authorizer:        authorizer,
 		rolesClaim:        config.RolesClaim,
@@ -190,7 +233,7 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (types.SessionIn
 		return types.SessionInfo{}, errors.New("id token presented as an access token")
 	}
 
-	roles, err := v.tokenRoles(ctx, token, rawToken)
+	roles, err := v.tokenRoles(ctx, token, rawToken, claims.Subject)
 	if err != nil {
 		return types.SessionInfo{}, err
 	}

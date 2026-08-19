@@ -148,10 +148,21 @@ func Test_Auth_SessionHandler_PolicyUnavailable(t *testing.T) {
 // stubRouter records the routes RegisterRoutes mounts, standing in for a chi.Router.
 type stubRouter struct {
 	mounted map[string]http.HandlerFunc
+	methods map[string]string
+}
+
+func newStubRouter() *stubRouter {
+	return &stubRouter{mounted: map[string]http.HandlerFunc{}, methods: map[string]string{}}
 }
 
 func (s *stubRouter) Get(pattern string, handler http.HandlerFunc) {
 	s.mounted[pattern] = handler
+	s.methods[pattern] = http.MethodGet
+}
+
+func (s *stubRouter) Post(pattern string, handler http.HandlerFunc) {
+	s.mounted[pattern] = handler
+	s.methods[pattern] = http.MethodPost
 }
 
 func Test_Auth_RegisterRoutes(t *testing.T) {
@@ -160,10 +171,10 @@ func Test_Auth_RegisterRoutes(t *testing.T) {
 	auth, err := NewWithVerifier(&mock.Verifier{}, nil)
 	require.NoError(t, err)
 
-	router := &stubRouter{mounted: map[string]http.HandlerFunc{}}
+	router := newStubRouter()
 	auth.RegisterRoutes(router)
 
-	require.Len(t, router.mounted, 2)
+	require.Len(t, router.mounted, 2, "a deployment without the browser flow mounts no login endpoint")
 	assert.Contains(t, router.mounted, ConfigPath)
 	assert.Contains(t, router.mounted, SessionPath)
 	assert.Equal(t, "/auth/config", ConfigPath)

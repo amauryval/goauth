@@ -139,7 +139,7 @@ func Test_Verifier_Verify_UserInfoRoles(t *testing.T) {
 	}{
 		{
 			name:           "the groups the endpoint serves are granted",
-			served:         map[string]any{"groups": []any{"guest"}},
+			served:         map[string]any{"sub": "some-subject", "groups": []any{"guest"}},
 			wantAuthorized: true,
 			wantRoles:      []types.Role{types.RoleGuest},
 		},
@@ -337,6 +337,43 @@ func Test_Verifier_Verify_UserInfoCaching(t *testing.T) {
 			assert.Equal(t, c.wantCalls, calls.Load())
 			assert.Equal(t, []types.Role{types.RoleAdmin}, first.Roles)
 			assert.Equal(t, first.Roles, second.Roles)
+		})
+	}
+}
+
+// Test_Verifier_Verify_UserInfoSubjectMismatch pins OpenID Connect Core 5.3.2: roles described for
+// another subject are never granted to the bearer of this token.
+func Test_Verifier_Verify_UserInfoSubjectMismatch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		served map[string]any
+	}{
+		{
+			name:   "the endpoint answers for another subject",
+			served: map[string]any{"sub": "someone-else", "groups": []any{"admin"}},
+		},
+		{
+			name:   "the endpoint answers without a subject at all",
+			served: map[string]any{"groups": []any{"admin"}},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, key, _ := setupCountingIssuer(t, http.StatusOK, c.served)
+			built := setupUserInfoVerifier(t, server.URL, 0)
+
+			claims := setupClaims(server.URL, testAudience, "some-subject", time.Now().Add(time.Hour))
+
+			info, err := built.Verify(context.Background(), setupSignedToken(t, key, claims))
+
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, types.ErrAuthorization, "a mismatched subject is a rejected token, not an outage")
+			assert.Equal(t, types.SessionInfo{}, info)
 		})
 	}
 }

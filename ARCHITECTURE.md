@@ -25,14 +25,20 @@ authorization code flow with PKCE and holds the tokens; this module only verifie
     holding what reading its tokens demands: the roles claim, and the scopes the browser requests.
 -   `authorization` — `FromToken` and `FromTokenNames`, mapping the role names the provider asserts
     to the roles the application declares.
+-   `browser` — the optional server driven login: PKCE, the state of a login in flight, the code
+    exchange, the AES-GCM sealed session cookie and the refresh that keeps it alive. It hands the
+    access token of the calling browser to the rest of the module and nothing else, so verification
+    and authorization are the same code path a bearer token takes.
 -   `types` — `Role`, `Decision`, `Authorizer`, `TokenVerifier`, `UserInfo`, `SessionInfo`,
     `Logger`.
 
 ## Request flow
 
-1. The browser sends `Authorization: Bearer <token>`.
-2. `RequireRoles` extracts the token, empty when there is none, and always hands it to the verifier:
-   what an absent token means is the verifier's call, not the middleware's.
+1. The browser presents its credential: a session cookie where the module drives the login, an
+   `Authorization: Bearer` header otherwise. Either way a `TokenSource` turns it into an access
+   token, renewing it first when the cookie holds a refresh token and the access token is spent.
+2. `RequireRoles` hands that token to the verifier, empty when there is none: what an absent token
+   means is the verifier's call, not the middleware's.
 3. `verifier` rejects an empty token, then checks the signature against the issuer key set, followed
    by `iss`, `aud`, `exp` and `nbf`, and finally refuses a token without a `sub` or carrying an ID
    token's own claims. A rejected token is a `401`.
@@ -46,6 +52,12 @@ A policy that could not be evaluated at all is a `503` rather than a `401` or a 
 too: a user stripped of every role by a provider outage is a service problem, not a denied caller.
 
 ## Design notes
+
+-   **The frontend holds nothing, when it can.** A token in `localStorage` is a credential handed
+    to any XSS on the page, and no care taken in the API takes that back. Where the module drives
+    the login, the tokens live in a sealed `HttpOnly` cookie the browser can present but not read,
+    and the frontend shrinks to a redirect and a `fetch`. The bearer path stays for callers that
+    are not browsers.
 
 -   **Verification in the app, not in a proxy.** A forward auth proxy would sit in front of every
     request, so an identity provider outage would take the public pages down with it. Here the

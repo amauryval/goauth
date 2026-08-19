@@ -10,11 +10,12 @@ presents, and decides what their bearer may do.
 
 -   `RequireRoles` — middleware requiring a valid token whose user holds every listed role.
 -   `RequireAnyRole` — middleware requiring one of the listed roles.
--   `RegisterRoutes` — mounts `GET /auth/config` and `GET /auth/session` for the browser UI.
+-   `RegisterRoutes` — mounts the endpoints the browser UI needs.
+-   An optional **server driven login**, so the frontend never handles a token at all.
 -   A choice of identity provider, `zitadel` or `pocketid`, decided by a deployment setting.
 -   An `Authorizer` mapping the role names the provider puts in the token to the application's own.
 
-Setting a provider up is covered in `SETUP.md`.
+Setting a provider up is covered in `SETUP.md`, and the browser side in `FRONTEND.md`.
 
 ## Installation
 
@@ -28,6 +29,30 @@ import (
     "github.com/amauryval/goauth/types"
 )
 ```
+
+## Two ways to sign users in
+
+**Server driven** (`Options.Browser`) — the module runs the whole OIDC flow: it redirects to the
+provider, exchanges the code with PKCE, keeps the tokens in a sealed `HttpOnly` cookie and spends
+the refresh token when the access token ages out. The frontend never sees a token, so there is
+nothing an XSS can steal and no OIDC library to ship:
+
+```js
+// The entire frontend.
+const session = await (await fetch("/auth/session")).json();
+if (!session.logged_in) location.href = "/auth/login?return_to=" + encodeURIComponent(location.pathname);
+
+await fetch("/api/skills", { method: "POST", body }); // the cookie rides along
+await fetch("/auth/logout", { method: "POST" });
+```
+
+**Browser driven** (the default) — the frontend obtains its own tokens with `oidc-client-ts` or
+equivalent and presents them as `Authorization: Bearer`. `GET /auth/config` serves it the issuer,
+the client Id and the scopes, so a single build works across every environment.
+
+Server driven is the safer of the two and is what a first-party frontend should use. The bearer
+path stays available in both modes, which is what lets a script or a service account call the same
+API a browser does.
 
 ## Usage
 
@@ -88,16 +113,63 @@ func (h Handler) Add(w http.ResponseWriter, r *http.Request) {
 `GET /auth/config` serves an empty client configuration: such a host tells the browser where to
 sign in by its own means.
 
+### Server driven login
+
+Pass an `Options.Browser` and the module signs users in itself:
+
+```go
+authApp, err := goauth.New(ctx, goauth.NewSettings(goauth.Options{
+    ProviderName: "pocketid",
+    IssuerURL:    "https://auth.example.com",
+    Audience:     "portfolio",
+    Browser: &goauth.BrowserOptions{
+        ClientSecret:  os.Getenv("AUTH_CLIENT_SECRET"), // empty for a public client, PKCE alone
+        RedirectURL:   "https://app.example.com/auth/callback",
+        Secret:        cookieSecret,                    // >= 32 bytes, from your secret store
+        PostLoginPath: "/",
+        PostLogoutURL: "https://app.example.com/",
+    },
+}), slog.Default())
+```
+
+`RedirectURL` must be registered at the provider and must resolve to `goauth.CallbackPath`. The
+`Secret` seals the cookies: losing it signs everyone out, leaking it lets its holder mint sessions,
+so it belongs wherever the deployment keeps its other secrets.
+
+Three more endpoints appear. `GET /auth/login` starts the flow, taking an optional `?return_to`
+that must be a path on this application — an absolute URL is dropped rather than followed, which is
+what keeps the endpoint from being an open redirect. `GET /auth/callback` finishes it. `POST
+/auth/logout` drops the session, and hands the browser on to the provider when `PostLogoutURL` is
+set. Logout is a `POST` so that a cross-site page cannot sign a visitor out by linking to it.
+
+The session cookie is `HttpOnly`, `Secure` and `SameSite=Lax`, and holds the tokens sealed with
+AES-GCM — the browser can present it but never read it. `SameSite=Lax` is the tightest setting the
+flow works under, since the provider returns the browser by a top-level navigation. That leaves
+cross-site `GET`: guard your writes as any cookie-authenticated API must. An API accepting only
+`application/json` is already beyond the reach of a form post.
+
 ### Endpoints
 
-`RegisterRoutes` mounts two `GET` handlers on any router exposing `Get(string, http.HandlerFunc)`,
-which `chi.Router` does. Their paths are `goauth.ConfigPath` and `goauth.SessionPath`, both under
-`goauth.Root`, and the caller decides the API root they hang from.
+`RegisterRoutes` mounts the handlers on any router exposing `Get` and `Post`, which `chi.Router`
+does. The paths are `goauth.ConfigPath`, `SessionPath`, `LoginPath`, `CallbackPath` and
+`LogoutPath`, all under `goauth.Root`, and the caller decides the API root they hang from. The
+login endpoints are only mounted where the deployment asked for the server driven flow.
 
-`GET /auth/config` — what the browser needs to start a login:
+`GET /auth/config` — how to sign in. Server driven, the frontend needs nothing else:
 
 ```json
-{ "issuer_url": "https://auth.example.com", "client_id": "portfolio", "scopes": "openid profile email offline_access groups" }
+{ "server_flow": true, "login_path": "/auth/login", "logout_path": "/auth/logout" }
+```
+
+Browser driven, it names the provider to go to:
+
+```json
+{
+    "server_flow": false,
+    "issuer_url": "https://auth.example.com",
+    "client_id": "portfolio",
+    "scopes": "openid profile email offline_access groups"
+}
 ```
 
 `GET /auth/session` — who the caller is, always `200`, so an anonymous visitor is a fact rather
@@ -165,6 +237,16 @@ that issuer, its `aud` this application, and `exp` and `nbf` place it in the pre
 algorithms are pinned to the asymmetric ones, so an issuer announcing a symmetric algorithm in its
 discovery document is not taken at its word.
 
+The issuer itself must be `https`, loopback aside: the module fetches the signing keys over that
+connection and forwards access tokens to the UserInfo endpoint on it, so cleartext would hand both
+to anyone on the path. A development stack whose provider answers on a container name can lift the
+rule through `verifier.Config.AllowInsecureIssuer`, which is deliberately not reachable from
+`Options` — no environment variable can turn it on.
+
+Where roles come from the UserInfo endpoint, the subject it answers with must be the one the token
+was verified for, as OpenID Connect Core 5.3.2 requires. Otherwise the roles of whoever the
+endpoint chose to describe would be granted to the bearer.
+
 Two shapes are refused beyond that. A token without a `sub` is rejected, since the `(Provider, ID)`
 pair below would otherwise be a key several users share. And an **ID token presented as an access
 token** is rejected — recognised by the `nonce`, `at_hash` or `c_hash` an access token never
@@ -179,9 +261,17 @@ Three things the module deliberately does not do:
 -   **Rate limiting.** A rejected token costs a signature verification and a log line, both driven
     by an unauthenticated caller. Put a rate limiter in front of the API, as any public endpoint
     deserves.
--   **Anything about the browser's token storage.** An SPA keeping a refresh token in `localStorage`
-    hands a long-lived credential to any XSS; `sessionStorage`, or no `offline_access` scope at all,
-    narrows that window. This module never sees those tokens and cannot enforce the choice.
+-   **CSRF.** In server driven mode the session is a cookie, and `SameSite=Lax` stops every
+    cross-site request but a top-level `GET`. Guarding the writes is the application's, as it is
+    for any cookie-authenticated API.
+-   **Anything about the browser's token storage, in bearer mode.** An SPA keeping a refresh token
+    in `localStorage` hands a long-lived credential to any XSS; `sessionStorage`, or no
+    `offline_access` scope at all, narrows that window. In bearer mode this module never sees those
+    tokens and cannot enforce the choice — which is the argument for the server driven flow, where
+    the frontend holds nothing to lose.
+
+Responses that depend on the caller carry `Vary: Authorization` and `Cache-Control: no-store`, so
+no cache along the way can hand one user's session to the next.
 
 ## What the token carries
 
