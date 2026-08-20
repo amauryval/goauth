@@ -104,7 +104,7 @@ func Test_newVerified(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			settings := NewSettings(Options{ProviderName: c.selected.Name(), IssuerURL: c.issuerURL, Audience: c.audience})
+			settings := NewSettings(WithProvider(c.selected.Name()), WithIssuer(c.issuerURL), WithAudience(c.audience))
 
 			built, err := newVerified(context.Background(), settings, c.selected, setupLogger())
 

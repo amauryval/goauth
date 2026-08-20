@@ -41,43 +41,6 @@ const (
 	defaultGuestRole = "guest"
 )
 
-// Options is what a host declares about a deployment, each setting named at the call site.
-// The settings are strings that would otherwise sit side by side in a parameter list, where
-// swapping the issuer and the audience still compiles and silently breaks audience isolation.
-type Options struct {
-	// Demo bypasses token verification entirely. See Settings.Demo.
-	Demo bool
-
-	// ProviderName is the kind of identity provider, one of provider.Names(). Required.
-	ProviderName string
-
-	// IssuerURL is the identity provider base URL, used for discovery and key retrieval.
-	IssuerURL string
-
-	// Audience is this application's client Id, checked against the token audience.
-	Audience string
-
-	// AdminRole is the name the provider gives the administration role, "admin" when empty.
-	AdminRole string
-
-	// GuestRole is the name the provider gives the read-only role, "guest" when empty.
-	GuestRole string
-
-	// ClientSecret authenticates this application when it asks the issuer whether a token is still
-	// active, as RFC 7662 requires, and when it exchanges an authorization code. A client the
-	// provider issued none identifies itself by its id alone.
-	ClientSecret string
-
-	// IntrospectionTTL reuses the issuer's answer about a token for that long, trading how quickly
-	// its decisions land against a round trip per request. Zero selects 15 seconds; a negative
-	// value asks the issuer on every single request.
-	IntrospectionTTL time.Duration
-
-	// Browser asks for the login flow to be driven on the server, so the frontend never handles a
-	// token. Left nil, the browser obtains its own tokens and presents them as bearer tokens.
-	Browser *BrowserOptions
-}
-
 // Settings gathers the authentication settings of a deployment.
 type Settings struct {
 	demo          bool
@@ -91,20 +54,65 @@ type Settings struct {
 	browser       *BrowserOptions
 }
 
+// Option declares one setting of a deployment. Each one names at the call site what it sets, so
+// that the settings never sit side by side in a parameter list, where swapping the issuer and the
+// audience still compiles and silently breaks audience isolation.
+type Option func(*Settings)
+
+// WithDemo bypasses token verification entirely. See Settings.Demo.
+// It takes the flag or environment value as it is read, so a host declares it unconditionally.
+func WithDemo(demo bool) Option {
+	return func(s *Settings) { s.demo = demo }
+}
+
+// WithProvider names the kind of identity provider, one of provider.Names(). Required.
+func WithProvider(name string) Option {
+	return func(s *Settings) { s.providerName = name }
+}
+
+// WithIssuer names the identity provider base URL, used for discovery and key retrieval.
+func WithIssuer(url string) Option {
+	return func(s *Settings) { s.issuerURL = url }
+}
+
+// WithAudience names this application's client Id, checked against the token audience.
+func WithAudience(clientID string) Option {
+	return func(s *Settings) { s.audience = clientID }
+}
+
+// WithAdminRole names the role the provider grants administration with, "admin" when unset.
+func WithAdminRole(name string) Option {
+	return func(s *Settings) { s.adminRole = name }
+}
+
+// WithGuestRole names the role the provider grants read-only access with, "guest" when unset.
+func WithGuestRole(name string) Option {
+	return func(s *Settings) { s.guestRole = name }
+}
+
+// WithClientSecret authenticates this application when it asks the issuer whether a token is still
+// active, as RFC 7662 requires, and when it exchanges an authorization code. A client the provider
+// issued none identifies itself by its id alone.
+func WithClientSecret(secret string) Option {
+	return func(s *Settings) { s.clientSecret = secret }
+}
+
+// WithIntrospectionTTL reuses the issuer's answer about a token for that long, trading how quickly
+// its decisions land against a round trip per request. Unset selects 15 seconds; a negative value
+// asks the issuer on every single request.
+func WithIntrospectionTTL(ttl time.Duration) Option {
+	return func(s *Settings) { s.introspectTTL = ttl }
+}
+
 // NewSettings gathers the settings of a deployment, as the host declares them.
 // Reading them from flags or from the environment is the host's business, not this module's.
-func NewSettings(options Options) Settings {
-	return Settings{
-		demo:          options.Demo,
-		providerName:  options.ProviderName,
-		issuerURL:     options.IssuerURL,
-		audience:      options.Audience,
-		adminRole:     options.AdminRole,
-		guestRole:     options.GuestRole,
-		clientSecret:  options.ClientSecret,
-		introspectTTL: options.IntrospectionTTL,
-		browser:       options.Browser,
+func NewSettings(options ...Option) Settings {
+	var settings Settings
+	for _, option := range options {
+		option(&settings)
 	}
+
+	return settings
 }
 
 // Demo reports whether token verification is bypassed, authorizing every visitor as an

@@ -94,7 +94,7 @@ func Test_New(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			settings := NewSettings(Options{Demo: c.demo, ProviderName: c.providerName, IssuerURL: c.issuerURL, Audience: c.audience, AdminRole: c.adminRole, GuestRole: c.guestRole})
+			settings := NewSettings(WithDemo(c.demo), WithProvider(c.providerName), WithIssuer(c.issuerURL), WithAudience(c.audience), WithAdminRole(c.adminRole), WithGuestRole(c.guestRole))
 
 			built, err := New(context.Background(), settings, setupLogger())
 
@@ -167,7 +167,7 @@ func Test_NewSettings(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			settings := NewSettings(Options{Demo: c.demo, ProviderName: c.providerName, IssuerURL: c.issuerURL, Audience: c.audience, AdminRole: c.adminRole, GuestRole: c.guestRole})
+			settings := NewSettings(WithDemo(c.demo), WithProvider(c.providerName), WithIssuer(c.issuerURL), WithAudience(c.audience), WithAdminRole(c.adminRole), WithGuestRole(c.guestRole))
 
 			assert.Equal(t, c.wantDemo, settings.Demo())
 			assert.Equal(t, c.wantProviderName, settings.ProviderName())
@@ -225,7 +225,7 @@ func Test_Settings_provider(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			settings := NewSettings(Options{ProviderName: c.providerName})
+			settings := NewSettings(WithProvider(c.providerName))
 
 			selected, err := settings.provider()
 
@@ -293,7 +293,7 @@ func Test_Settings_authorizer(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			settings := NewSettings(Options{AdminRole: c.adminRole, GuestRole: c.guestRole})
+			settings := NewSettings(WithAdminRole(c.adminRole), WithGuestRole(c.guestRole))
 
 			decision, err := settings.authorizer().Authorize(context.Background(), &types.UserInfo{Roles: c.claimed})
 

@@ -40,7 +40,7 @@ func Test_New_demo(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			settings := NewSettings(Options{Demo: true, ProviderName: c.providerName, IssuerURL: c.issuerURL, Audience: c.audience})
+			settings := NewSettings(WithDemo(true), WithProvider(c.providerName), WithIssuer(c.issuerURL), WithAudience(c.audience))
 
 			built, err := New(context.Background(), settings, setupLogger())
 

@@ -36,7 +36,7 @@ import (
 
 ## Two ways to sign users in
 
-**Server driven** (`Options.Browser`) — the module runs the whole OIDC flow: it redirects to the
+**Server driven** (`goauth.WithBrowser`) — the module runs the whole OIDC flow: it redirects to the
 provider, exchanges the code with PKCE, keeps the tokens in a sealed `HttpOnly` cookie and spends
 the refresh token when the access token ages out. The frontend never sees a token, so there is
 nothing an XSS can steal and no OIDC library to ship:
@@ -61,7 +61,8 @@ API a browser does.
 ## Usage
 
 A deployment builds its `Auth` from a `Settings`, which records what the host declares through the
-named fields of an `Options`. Undeclared role names fall back to `admin` and `guest`, the names
+`With...` options, each naming at the call site what it sets. Undeclared role names fall back to
+`admin` and `guest`, the names
 `SETUP.md` has you create at the provider.
 
 Reading the settings from flags or from the environment is the host's business: this module only
@@ -69,13 +70,13 @@ names the variables a host is expected to read, through `DemoEnv`, `ProviderEnv`
 `AudienceEnv`, `AdminRoleEnv` and `GuestRoleEnv`. `.env.example` spells out the mapping.
 
 ```go
-authApp, err := goauth.New(ctx, goauth.NewSettings(goauth.Options{
-    ProviderName: os.Getenv(goauth.ProviderEnv), // "pocketid"
-    IssuerURL:    os.Getenv(goauth.IssuerEnv),   // "https://auth.example.com"
-    Audience:     os.Getenv(goauth.AudienceEnv), // "portfolio"
-    AdminRole:    os.Getenv(goauth.AdminRoleEnv), // "portfolio_admin", "admin" when empty
-    GuestRole:    os.Getenv(goauth.GuestRoleEnv), // "portfolio_viewer", "guest" when empty
-}), slog.Default())
+authApp, err := goauth.New(ctx, goauth.NewSettings(
+    goauth.WithProvider(os.Getenv(goauth.ProviderEnv)),   // "pocketid"
+    goauth.WithIssuer(os.Getenv(goauth.IssuerEnv)),       // "https://auth.example.com"
+    goauth.WithAudience(os.Getenv(goauth.AudienceEnv)),   // "portfolio"
+    goauth.WithAdminRole(os.Getenv(goauth.AdminRoleEnv)), // "portfolio_admin", "admin" when empty
+    goauth.WithGuestRole(os.Getenv(goauth.GuestRoleEnv)), // "portfolio_viewer", "guest" when empty
+), slog.Default())
 if err != nil {
     return fmt.Errorf("auth: %w", err)
 }
@@ -119,25 +120,25 @@ sign in by its own means.
 
 ### Server driven login
 
-Pass an `Options.Browser` and the module signs users in itself:
+Pass a `goauth.WithBrowser` and the module signs users in itself:
 
 ```go
-authApp, err := goauth.New(ctx, goauth.NewSettings(goauth.Options{
-    ProviderName: "pocketid",
-    IssuerURL:    "https://auth.example.com",
-    Audience:     "portfolio",
-    Browser: &goauth.BrowserOptions{
-        ClientSecret:  os.Getenv("AUTH_CLIENT_SECRET"), // empty for a public client, PKCE alone
-        RedirectURL:   "https://app.example.com/auth/callback",
-        Secret:        cookieSecret,                    // >= 32 bytes, from your secret store
-        PostLoginPath: "/",
-        PostLogoutURL: "https://app.example.com/",
-    },
-}), slog.Default())
+authApp, err := goauth.New(ctx, goauth.NewSettings(
+    goauth.WithProvider("pocketid"),
+    goauth.WithIssuer("https://auth.example.com"),
+    goauth.WithAudience("portfolio"),
+    goauth.WithClientSecret(os.Getenv("AUTH_CLIENT_SECRET")), // empty for a public client, PKCE alone
+    goauth.WithBrowser(
+        "https://app.example.com/auth/callback",
+        cookieSecret, // >= 32 bytes, from your secret store
+        goauth.WithPostLoginPath("/"),
+        goauth.WithPostLogoutURL("https://app.example.com/"),
+    ),
+), slog.Default())
 ```
 
-`RedirectURL` must be registered at the provider and must resolve to `goauth.CallbackPath`. The
-`Secret` seals the cookies: losing it signs everyone out, leaking it lets its holder mint sessions,
+The redirect URL must be registered at the provider and must resolve to `goauth.CallbackPath`. The
+secret seals the cookies: losing it signs everyone out, leaking it lets its holder mint sessions,
 so it belongs wherever the deployment keeps its other secrets.
 
 Three more endpoints appear. `GET /auth/login` starts the flow, taking an optional `?return_to`
@@ -232,7 +233,7 @@ them.
 grants only what the caller spells out, so it opens nothing on its own.
 
 ```go
-authApp, err := goauth.New(ctx, goauth.NewSettings(goauth.Options{Demo: true}), slog.Default())
+authApp, err := goauth.New(ctx, goauth.NewSettings(goauth.WithDemo(true)), slog.Default())
 ```
 
 ```bash
@@ -316,9 +317,22 @@ no cache along the way can hand one user's session to the next.
 ## What the token carries
 
 The browser presents an **access token**, and an access token carries no profile claim: no name, no
-email, no avatar. Those live in the ID token, which belongs to the browser and never reaches this
-module. `UserInfo` therefore holds `Provider` (the issuer), `ID` (the subject) and `Roles`, and
-nothing else. A UI needing a name or an avatar reads them from its own ID token.
+email, no avatar. `UserInfo` therefore holds `Provider` (the issuer), `ID` (the subject) and
+`Roles`, and nothing else, so no policy can be written on a field that is always empty.
+
+Who the visitor is to a reader is answered separately, by `GET /auth/session`:
+
+-   **Browser driven flow.** The browser holds its own ID token, which is where the provider put
+    the profile. It reads the claims there, and the session carries none.
+-   **Server driven flow.** The browser never receives an ID token, so it would have nothing but a
+    subject identifier to show for a name. The session then carries a `profile` object —
+    `username`, `name`, `email`, `picture` — read from the issuer's `/userinfo` endpoint, which the
+    access token opens. Every field is optional: a provider fills what it chooses to.
+
+That lookup shares its round trip and its cache with the roles, so a provider whose roles already
+come from `/userinfo` pays nothing for it, and a failing lookup costs the name rather than the
+session. The profile settles nothing: authentication and authorization are decided on the access
+token, and the claims are for display.
 
 `Roles` there are the raw names the provider asserted, before any policy ruled on them, and they
 are left out of the JSON encoding on purpose: what a browser is told are the roles the policy

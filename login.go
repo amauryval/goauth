@@ -45,6 +45,43 @@ type BrowserOptions struct {
 	InsecureCookies bool
 }
 
+// BrowserOption declares one setting of the browser login flow, named at the call site.
+type BrowserOption func(*BrowserOptions)
+
+// WithBrowser asks for the login flow to be driven on the server, so the frontend never handles a
+// token. Left undeclared, the browser obtains its own tokens and presents them as bearer tokens.
+//
+// The redirect URL must be registered at the provider and resolve to CallbackPath on this
+// application, and the secret sealing the session cookie must be at least 32 bytes.
+func WithBrowser(redirectURL string, secret []byte, options ...BrowserOption) Option {
+	return func(s *Settings) {
+		browser := &BrowserOptions{RedirectURL: redirectURL, Secret: secret}
+		for _, option := range options {
+			option(browser)
+		}
+
+		s.browser = browser
+	}
+}
+
+// WithPostLoginPath is where a finished login lands when it named no destination, defaulting to
+// "/". It is a path on this application, never an absolute URL.
+func WithPostLoginPath(path string) BrowserOption {
+	return func(o *BrowserOptions) { o.PostLoginPath = path }
+}
+
+// WithPostLogoutURL is where the provider sends the browser after signing out. Left undeclared the
+// browser is not sent to the provider at all, and only the session is dropped.
+func WithPostLogoutURL(url string) BrowserOption {
+	return func(o *BrowserOptions) { o.PostLogoutURL = url }
+}
+
+// WithInsecureCookies drops the Secure attribute, for a local stack served over http.
+// It must never be set on a deployment: the session then travels in cleartext.
+func WithInsecureCookies(insecure bool) BrowserOption {
+	return func(o *BrowserOptions) { o.InsecureCookies = insecure }
+}
+
 // browserSource reads the session cookie, and falls back to the Authorization header.
 //
 // Keeping the header alive beside the cookie is what lets a service account or a script call the

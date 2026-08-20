@@ -52,7 +52,7 @@ authorization code flow with PKCE and holds the tokens; this module only verifie
 
 ## Packages
 
--   `goauth` — the facade and the deployment entry point: `Options` and `NewSettings` holding what
+-   `goauth` — the facade and the deployment entry point: `NewSettings` and its `With...` options holding what
     the host declares, `New` assembling the verifier and the policy from them, `Auth`, the
     `RequireRoles` and `RequireAnyRole` middlewares, `RegisterRoutes` mounting the config and
     session endpoints, and the bearer token extraction. It is the only package a host application
@@ -142,3 +142,8 @@ too: a user stripped of every role by a provider outage is a service problem, no
     subject, the issuer and the roles — never a name, an email or an avatar. `UserInfo` holds only
     what is really there, so no policy can be written on a field that is always empty. A UI needing
     a profile reads its own ID token, which is where the provider puts it.
+-   **A profile is displayed, never trusted.** The one frontend that cannot read an ID token is the
+    one this module signs in itself, so `GET /auth/session` describes the user there, from the
+    issuer's `/userinfo` endpoint. It rides the lookup the roles already make, is checked against
+    the subject the token was verified for, and is carried by `SessionInfo` rather than by
+    `UserInfo`: it is what a page shows, not what a decision is made on.

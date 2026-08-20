@@ -81,7 +81,7 @@ func Test_Paths(t *testing.T) {
 func Test_Settings_rejectProviderSettings_Browser(t *testing.T) {
 	t.Parallel()
 
-	settings := NewSettings(Options{Demo: true, Browser: &BrowserOptions{}})
+	settings := NewSettings(WithDemo(true), WithBrowser("", nil))
 
 	err := settings.rejectProviderSettings()
 
@@ -127,37 +127,28 @@ func Test_New_BrowserFlow(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		browser *BrowserOptions
+		browser Option
 		wantErr string
 	}{
 		{
 			name: "a complete browser configuration",
-			browser: &BrowserOptions{
-				RedirectURL:   "https://app.example.com/auth/callback",
-				Secret:        secret,
-				PostLogoutURL: "https://app.example.com/",
-			},
+			browser: WithBrowser("https://app.example.com/auth/callback", secret,
+				WithPostLogoutURL("https://app.example.com/")),
 		},
 		{
-			name: "a secret too short to seal a cookie",
-			browser: &BrowserOptions{
-				RedirectURL: "https://app.example.com/auth/callback",
-				Secret:      []byte("too-short"),
-			},
+			name:    "a secret too short to seal a cookie",
+			browser: WithBrowser("https://app.example.com/auth/callback", []byte("too-short")),
 			wantErr: "at least 32 bytes",
 		},
 		{
 			name:    "a missing redirect URL",
-			browser: &BrowserOptions{Secret: secret},
+			browser: WithBrowser("", secret),
 			wantErr: "redirect URL is required",
 		},
 		{
 			name: "a post login destination off this application",
-			browser: &BrowserOptions{
-				RedirectURL:   "https://app.example.com/auth/callback",
-				Secret:        secret,
-				PostLoginPath: "https://evil.example.com",
-			},
+			browser: WithBrowser("https://app.example.com/auth/callback", secret,
+				WithPostLoginPath("https://evil.example.com")),
 			wantErr: "path on this application",
 		},
 	}
@@ -166,12 +157,12 @@ func Test_New_BrowserFlow(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			auth, err := New(context.Background(), NewSettings(Options{
-				ProviderName: provider.Zitadel.Name(),
-				IssuerURL:    server.URL,
-				Audience:     "portfolio",
-				Browser:      c.browser,
-			}), nil)
+			auth, err := New(context.Background(), NewSettings(
+				WithProvider(provider.Zitadel.Name()),
+				WithIssuer(server.URL),
+				WithAudience("portfolio"),
+				c.browser,
+			), nil)
 
 			if c.wantErr != "" {
 				require.Error(t, err)

@@ -141,18 +141,18 @@ func (i *e2eIssuer) sign(t *testing.T, claims map[string]any) string {
 func setupE2EAuth(t *testing.T, issuer *e2eIssuer) *Auth {
 	t.Helper()
 
-	auth, err := New(context.Background(), NewSettings(Options{
-		ProviderName:     provider.Zitadel.Name(),
-		IssuerURL:        issuer.server.URL,
-		Audience:         e2eAudience,
-		AdminRole:        e2eRole,
-		IntrospectionTTL: -time.Second,
-		Browser: &BrowserOptions{
-			RedirectURL:     "http://app.example.com/auth/callback",
-			Secret:          []byte("an-end-to-end-cookie-secret-of-enough-bytes"),
-			InsecureCookies: true,
-		},
-	}), nil)
+	auth, err := New(context.Background(), NewSettings(
+		WithProvider(provider.Zitadel.Name()),
+		WithIssuer(issuer.server.URL),
+		WithAudience(e2eAudience),
+		WithAdminRole(e2eRole),
+		WithIntrospectionTTL(-time.Second),
+		WithBrowser(
+			"http://app.example.com/auth/callback",
+			[]byte("an-end-to-end-cookie-secret-of-enough-bytes"),
+			WithInsecureCookies(true),
+		),
+	), nil)
 	require.NoError(t, err)
 
 	return auth

@@ -246,7 +246,7 @@ func setupUserInfoVerifier(t *testing.T, issuerURL string, ttl time.Duration) *V
 	})
 	require.NoError(t, err)
 
-	built.roles = newRoleCache(ttl, maxCachedUserInfo)
+	built.userInfos = newLookupCache[map[string]any](ttl, maxCachedUserInfo)
 
 	return built
 }

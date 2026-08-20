@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_roleCache(t *testing.T) {
+func Test_lookupCache(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -16,7 +16,7 @@ func Test_roleCache(t *testing.T) {
 	t.Run("roles put in the cache are read back", func(t *testing.T) {
 		t.Parallel()
 
-		cache := newRoleCache(time.Minute, 8)
+		cache := newLookupCache[[]string](time.Minute, 8)
 		cache.put("token", []string{"admin"}, tokenExpiry, now)
 
 		roles, cached := cache.get("token", now)
@@ -28,7 +28,7 @@ func Test_roleCache(t *testing.T) {
 	t.Run("an entry is forgotten once its ttl elapsed", func(t *testing.T) {
 		t.Parallel()
 
-		cache := newRoleCache(time.Minute, 8)
+		cache := newLookupCache[[]string](time.Minute, 8)
 		cache.put("token", []string{"admin"}, tokenExpiry, now)
 
 		roles, cached := cache.get("token", now.Add(time.Minute))
@@ -40,7 +40,7 @@ func Test_roleCache(t *testing.T) {
 	t.Run("an entry never outlives the token it was read for", func(t *testing.T) {
 		t.Parallel()
 
-		cache := newRoleCache(time.Hour, 8)
+		cache := newLookupCache[[]string](time.Hour, 8)
 		cache.put("token", []string{"admin"}, now.Add(time.Minute), now)
 
 		_, stillFresh := cache.get("token", now.Add(30*time.Second))
@@ -53,7 +53,7 @@ func Test_roleCache(t *testing.T) {
 	t.Run("an already expired token is not cached at all", func(t *testing.T) {
 		t.Parallel()
 
-		cache := newRoleCache(time.Hour, 8)
+		cache := newLookupCache[[]string](time.Hour, 8)
 		cache.put("token", []string{"admin"}, now.Add(-time.Second), now)
 
 		_, cached := cache.get("token", now)
@@ -65,7 +65,7 @@ func Test_roleCache(t *testing.T) {
 	t.Run("a non positive ttl disables the cache", func(t *testing.T) {
 		t.Parallel()
 
-		cache := newRoleCache(-time.Second, 8)
+		cache := newLookupCache[[]string](-time.Second, 8)
 		cache.put("token", []string{"admin"}, tokenExpiry, now)
 
 		_, cached := cache.get("token", now)
@@ -77,7 +77,7 @@ func Test_roleCache(t *testing.T) {
 	t.Run("a nil cache reads and writes nothing", func(t *testing.T) {
 		t.Parallel()
 
-		var cache *roleCache
+		var cache *lookupCache[[]string]
 		cache.put("token", []string{"admin"}, tokenExpiry, now)
 
 		_, cached := cache.get("token", now)
@@ -90,7 +90,7 @@ func Test_roleCache(t *testing.T) {
 
 		const max = 4
 
-		cache := newRoleCache(time.Minute, max)
+		cache := newLookupCache[[]string](time.Minute, max)
 		for _, token := range []string{"a", "b", "c", "d", "e", "f", "g"} {
 			cache.put(token, []string{"admin"}, tokenExpiry, now)
 		}
@@ -103,7 +103,7 @@ func Test_roleCache(t *testing.T) {
 
 		const max = 2
 
-		cache := newRoleCache(time.Minute, max)
+		cache := newLookupCache[[]string](time.Minute, max)
 		cache.put("stale", []string{"admin"}, tokenExpiry, now)
 		cache.put("fresh", []string{"guest"}, tokenExpiry, now.Add(90*time.Second))
 		cache.put("newest", []string{"guest"}, tokenExpiry, now.Add(91*time.Second))
@@ -119,7 +119,7 @@ func Test_roleCache(t *testing.T) {
 	t.Run("the raw token is not kept as a key", func(t *testing.T) {
 		t.Parallel()
 
-		cache := newRoleCache(time.Minute, 8)
+		cache := newLookupCache[[]string](time.Minute, 8)
 		cache.put("secret-token", []string{"admin"}, tokenExpiry, now)
 
 		for key := range cache.entries {

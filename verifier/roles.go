@@ -35,21 +35,34 @@ func (v *Verifier) tokenRoles(ctx context.Context, token *oidc.IDToken, rawToken
 
 // userInfoRoles reads the role names from the UserInfo endpoint the access token opens,
 // which is where a provider emitting no role in its access tokens states them.
+func (v *Verifier) userInfoRoles(ctx context.Context, rawToken, subject string, tokenExpiry time.Time) ([]string, error) {
+	claims, err := v.userInfoClaims(ctx, rawToken, subject, tokenExpiry)
+	if err != nil {
+		return nil, err
+	}
+
+	return v.claimedRoles(claims), nil
+}
+
+// userInfoClaims reads what the UserInfo endpoint says about the bearer of the access token.
 //
 // The lookup is cached for the token, so a busy API queries the provider once per token rather
-// than once per request, and a failing lookup is an error rather than an empty role set: a user
-// stripped of every role because the provider is unreachable is a service outage, and answering
-// it with a 403 would read as a permission bug.
-func (v *Verifier) userInfoRoles(ctx context.Context, rawToken, subject string, tokenExpiry time.Time) ([]string, error) {
+// than once per request, and everything read from that endpoint — the roles a provider states
+// nowhere else, the profile a browser is shown — shares the one round trip.
+//
+// A failing lookup is an error rather than an empty answer: a user stripped of every role because
+// the provider is unreachable is a service outage, and answering it with a 403 would read as a
+// permission bug.
+func (v *Verifier) userInfoClaims(ctx context.Context, rawToken, subject string, tokenExpiry time.Time) (map[string]any, error) {
 	if v.provider == nil {
-		v.logger.Error("auth: no issuer to read the roles from")
+		v.logger.Error("auth: no issuer to ask about the user")
 
-		return nil, fmt.Errorf("%w: no issuer to read the roles from", types.ErrAuthorization)
+		return nil, fmt.Errorf("%w: no issuer to ask about the user", types.ErrAuthorization)
 	}
 
 	now := v.now()
-	if roles, cached := v.roles.get(rawToken, now); cached {
-		return roles, nil
+	if cached, found := v.userInfos.get(rawToken, now); found {
+		return cached, nil
 	}
 
 	requestCtx, cancel := context.WithTimeout(issuerContext(ctx, v.httpClient), providerTimeout)
@@ -78,10 +91,9 @@ func (v *Verifier) userInfoRoles(ctx context.Context, rawToken, subject string, 
 		return nil, fmt.Errorf("%w: unreadable userinfo claims: %w", types.ErrAuthorization, err)
 	}
 
-	roles := v.claimedRoles(claims)
-	v.roles.put(rawToken, roles, tokenExpiry, now)
+	v.userInfos.put(rawToken, claims, tokenExpiry, now)
 
-	return roles, nil
+	return claims, nil
 }
 
 // claimedRoles reads the role names out of the claim the provider puts them in.

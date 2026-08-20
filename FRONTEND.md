@@ -26,12 +26,12 @@ async function session() {
 
     if (response.status === 503) return { state: "unavailable" };
 
-    const { logged_in, authorized, roles = [], user } = await response.json();
+    const { logged_in, authorized, roles = [], user, profile } = await response.json();
 
     if (!logged_in) return { state: "anonymous" };
-    if (!authorized) return { state: "no-access", user };
+    if (!authorized) return { state: "no-access", user, profile };
 
-    return { state: "signed-in", roles, user };
+    return { state: "signed-in", roles, user, profile };
 }
 ```
 
@@ -177,6 +177,41 @@ cost of re-authenticating when the access token expires. The module never sees t
 cannot enforce the choice — which is the argument for the server driven mode, where the frontend
 holds nothing worth stealing.
 
+## Who is signed in
+
+`user` identifies the account — `{ "provider": ..., "id": ... }` — and is the pair to store beside
+your own records. It is not a thing to display: it is an issuer URL and a subject identifier.
+
+What to display is `profile`, which the session carries **in the server driven flow only**:
+
+```json
+{
+    "logged_in": true,
+    "authorized": true,
+    "roles": ["admin"],
+    "user": { "provider": "https://auth.example.com", "id": "312..." },
+    "profile": {
+        "username": "amaury",
+        "name": "Amaury Valorge",
+        "email": "amaury@example.com",
+        "picture": "https://auth.example.com/avatar.png"
+    }
+}
+```
+
+Every field is optional, and so is the whole object: a provider fills the claims it chooses to, and
+a lookup that fails costs the name rather than the session. Fall back on `user.id` rather than
+rendering an empty header, and never gate anything on a profile — it is what a page shows, not what
+a decision is made on.
+
+**In the browser driven flow there is no `profile`, by design.** The browser holds its own ID token,
+which is where the provider put these claims, and `oidc-client-ts` hands them over already parsed:
+
+```js
+const user = await users.getUser();
+const { name, email, picture, preferred_username } = user.profile;
+```
+
 ## Reading roles
 
 `roles` are the roles this application granted, not the raw names the provider uses. The provider's
@@ -220,6 +255,7 @@ through `/auth/login`, which is the one response that fits all of them.
 -   [ ] Read `/auth/config` once, branch on `server_flow`.
 -   [ ] Distinguish the four session states, and give `logged_in && !authorized` a dead end rather
         than a redirect.
+-   [ ] Display `profile`, fall back on `user.id`, and gate nothing on either.
 -   [ ] Send `Content-Type: application/json` on every write.
 -   [ ] Branch on `error`, never on `message`.
 -   [ ] Treat `403` and `503` as anything but a reason to log in again.

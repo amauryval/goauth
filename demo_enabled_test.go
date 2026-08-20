@@ -25,7 +25,7 @@ func Test_New_demo(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			built, err := New(context.Background(), NewSettings(Options{Demo: true}), setupLogger())
+			built, err := New(context.Background(), NewSettings(WithDemo(true)), setupLogger())
 
 			require.NoError(t, err)
 			assert.NotNil(t, built)

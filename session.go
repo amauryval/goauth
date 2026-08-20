@@ -1,6 +1,7 @@
 package goauth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -86,15 +87,31 @@ func (a *Auth) ConfigHandler() http.HandlerFunc {
 	}
 }
 
+// ProfileReader reads the profile claims describing the bearer of a token, for a frontend to show
+// the visitor who they are signed in as. It is satisfied by *verifier.Verifier.
+//
+// It is asked for separately rather than required of every types.TokenVerifier: a host injecting
+// its own verification owes this module a verdict on a token, not a way to describe a person, and
+// a session simply carries no profile where none can be read.
+type ProfileReader interface {
+	Profile(ctx context.Context, rawToken, subject string) (*types.Profile, error)
+}
+
 // SessionHandler reports the authenticated user and the roles granted to its token.
 // Roles are decided by the authorization policy, never carried by the token, so the
 // browser has no other way to learn them.
+//
+// Where the login flow is driven on the server, it also reports who the visitor is: that browser
+// never receives the ID token the profile claims live in, and would otherwise have nothing but a
+// subject identifier to show for a name.
 func (a *Auth) SessionHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		varyOnAuthorization(w)
 		noStore(w)
 
-		session, err := a.verifier.Verify(r.Context(), a.tokens.Token(w, r))
+		rawToken := a.tokens.Token(w, r)
+
+		session, err := a.verifier.Verify(r.Context(), rawToken)
 		if errors.Is(err, types.ErrAuthorization) {
 			a.logger.Error("auth: policy unavailable", "error", err)
 			respondUnavailable(w)
@@ -106,7 +123,30 @@ func (a *Auth) SessionHandler() http.HandlerFunc {
 			session = types.SessionInfo{}
 		}
 
+		session.Profile = a.profileOf(r.Context(), rawToken, session)
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(session)
 	}
+}
+
+// profileOf describes the signed in visitor, nil when there is nobody to describe, nowhere to read
+// it from, or the browser holds the ID token itself.
+//
+// A lookup that fails costs the name and nothing else: the session was already established, and
+// refusing it over an avatar would turn a cosmetic outage into a sign in loop.
+func (a *Auth) profileOf(ctx context.Context, rawToken string, session types.SessionInfo) *types.Profile {
+	reader, canRead := a.verifier.(ProfileReader)
+	if a.flow == nil || !canRead || !session.LoggedIn || session.User == nil {
+		return nil
+	}
+
+	profile, err := reader.Profile(ctx, rawToken, session.User.ID)
+	if err != nil {
+		a.logger.Warn("auth: the signed in user could not be described", "error", err)
+
+		return nil
+	}
+
+	return profile
 }

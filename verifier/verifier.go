@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	// userInfoTTL is how long the roles read from the UserInfo endpoint are reused.
+	// userInfoTTL is how long what the UserInfo endpoint said about a token is reused.
 	// It trades the delay a role change takes to be seen against a round trip per request, and is
 	// short enough that a revocation still lands within seconds.
 	userInfoTTL = 30 * time.Second
@@ -98,9 +98,9 @@ type Verifier struct {
 	authorizer        types.Authorizer
 	rolesClaim        string
 	rolesFromUserInfo bool
-	roles             *roleCache
+	userInfos         *lookupCache[map[string]any]
 	introspector      *introspector
-	introspections    *roleCache
+	introspections    *lookupCache[[]string]
 	logger            types.Logger
 
 	// now reads the current time, replaced by the tests to age the cache without waiting.
@@ -175,9 +175,9 @@ func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authoriz
 		authorizer:        authorizer,
 		rolesClaim:        config.RolesClaim,
 		rolesFromUserInfo: config.RolesFromUserInfo,
-		roles:             newRoleCache(userInfoTTL, maxCachedUserInfo),
+		userInfos:         newLookupCache[map[string]any](userInfoTTL, maxCachedUserInfo),
 		introspector:      asker,
-		introspections:    newRoleCache(introspectionTTL, maxCachedUserInfo),
+		introspections:    newLookupCache[[]string](introspectionTTL, maxCachedUserInfo),
 		logger:            logger,
 		now:               time.Now,
 	}
