@@ -137,15 +137,32 @@ authApp, err := goauth.New(ctx, goauth.NewSettings(
 ), slog.Default())
 ```
 
-The redirect URL must be registered at the provider and must resolve to `goauth.CallbackPath`. The
-secret seals the cookies: losing it signs everyone out, leaking it lets its holder mint sessions,
-so it belongs wherever the deployment keeps its other secrets.
+The redirect URL must be registered at the provider, must resolve to `goauth.CallbackPath`, and
+must be absolute — it is also what the module compares against to tell a request from this
+application apart from one another site made on a visitor's behalf. The secret seals the cookies:
+losing it signs everyone out, leaking it lets its holder mint sessions, so it belongs wherever the
+deployment keeps its other secrets.
+
+**Replacing that secret** would sign everyone out, were the old one simply dropped. Declare it as
+retired instead: the new secret seals from that moment, the old one still opens the sessions it
+sealed, and nobody notices.
+
+```go
+goauth.WithBrowser(redirectURL, newSecret,
+    goauth.WithRetiredSecrets(previousSecret),
+)
+```
+
+Drop the retired secret once the sessions it sealed are gone — they are opened until they expire or
+are next written. Keeping it for ever would leave a leaked secret usable for ever, which is what
+rotating was meant to end.
 
 Three more endpoints appear. `GET /auth/login` starts the flow, taking an optional `?return_to`
 that must be a path on this application — an absolute URL is dropped rather than followed, which is
 what keeps the endpoint from being an open redirect. `GET /auth/callback` finishes it. `POST
 /auth/logout` drops the session, and hands the browser on to the provider when `PostLogoutURL` is
-set. Logout is a `POST` so that a cross-site page cannot sign a visitor out by linking to it.
+set. Logout is a `POST` so that a cross-site page cannot sign a visitor out by linking to it, and
+it checks the request's origin, so that one cannot do it with a form it submits itself either.
 
 Every login ends with the ID token being verified against the nonce it was started with, as OpenID
 Connect Core 3.1.3.7 requires, which is what ties the session to the person it names. Signing out
@@ -289,7 +306,19 @@ deployment having to know it should ask.
     refusal, and never past the token's own expiry.
 -   There is no setting that declines to ask. An issuer advertising no endpoint is not asked because
     there is nowhere to ask, and that is logged loudly at every start: it is the one case where a
-    deleted account keeps working until its token expires.
+    deleted account keeps working until its token expires — and, for a session held by a refresh
+    token, one that carries no expiry of its own, for as long as the provider keeps renewing it.
+-   `WithRequireIntrospection(true)` refuses to start against such an issuer, rather than running
+    without it. A warning at startup is a line in a log; this makes it a deployment that does not
+    come up. **Check your provider advertises `introspection_endpoint` in its discovery document,
+    and turn this on if it does:**
+
+    ```sh
+    curl -s "$AUTH_ISSUER/.well-known/openid-configuration" | jq -r .introspection_endpoint
+    ```
+
+    Zitadel and PocketID both advertise one. It is off by default only because it would break a
+    deployment already running against an issuer that does not.
 -   An issuer that cannot be reached is a `503`, not a denial. Not knowing whether someone is still
     signed in is an outage; treating it as a revocation would sign everyone out on a hiccup.
 
@@ -311,8 +340,8 @@ Three things the module deliberately does not do:
     tokens and cannot enforce the choice — which is the argument for the server driven flow, where
     the frontend holds nothing to lose.
 
-Responses that depend on the caller carry `Vary: Authorization` and `Cache-Control: no-store`, so
-no cache along the way can hand one user's session to the next.
+Responses that depend on the caller carry `Vary: Authorization, Cookie` and `Cache-Control:
+no-store`, so no cache along the way can hand one user's session to the next.
 
 ## What the token carries
 
@@ -431,8 +460,18 @@ mise install
 mise run check   # everything CI runs
 mise run test
 mise run vet
+mise run vulns
 ```
 
 The demo path only compiles under `authdemo`, so the tests run twice: once for the shipped build,
-once for the demo one. CI runs `gofmt`, `go vet`, `go mod tidy` and a `-race` test run on both.
+once for the demo one. CI runs `gofmt`, `go mod tidy`, `go vet` and a `-race` test run on both, then
+`govulncheck`: the signing keys, the JWT parsing and the token exchange live in dependencies, so an
+advisory in one of them is an advisory here.
+
+## Reporting a vulnerability
+
+Privately, through GitHub's
+[security advisories](https://github.com/amauryval/goauth/security/advisories/new) — not as an
+issue or a pull request. `SECURITY.md` says what is in scope, what is deliberate, and what a useful
+report contains.
 

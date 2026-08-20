@@ -283,3 +283,61 @@ func Test_Verifier_Verify_IntrospectionCaching(t *testing.T) {
 		assert.Equal(t, int64(2), calls.Load(), "the answer is reused, never kept")
 	})
 }
+
+// Test_New_RequireIntrospection pins the deployment-time refusal: an issuer that advertises
+// nowhere to ask whether a token is still active leaves this module unable to tell a live account
+// from a disabled one, and a deployment that cannot live with that says so rather than reading a
+// warning in a log.
+func Test_New_RequireIntrospection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an issuer advertising none is refused", func(t *testing.T) {
+		t.Parallel()
+
+		server, _ := setupIssuer(t)
+
+		built, err := New(context.Background(), setupAuthorizer(), Config{
+			IssuerURL:            server.URL,
+			Audience:             testAudience,
+			RolesClaim:           testRolesClaim,
+			RequireIntrospection: true,
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no introspection endpoint")
+		assert.Nil(t, built)
+	})
+
+	t.Run("an issuer advertising one is accepted", func(t *testing.T) {
+		t.Parallel()
+
+		server, _, _, _ := introspecting(t, http.StatusOK, map[string]any{"active": true})
+
+		built, err := New(context.Background(), setupAuthorizer(), Config{
+			IssuerURL:            server.URL,
+			Audience:             testAudience,
+			RolesClaim:           testRolesClaim,
+			RequireIntrospection: true,
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, built)
+		assert.NotNil(t, built.introspector, "the issuer advertises one, so it must be asked")
+	})
+
+	t.Run("without the requirement an issuer advertising none still starts", func(t *testing.T) {
+		t.Parallel()
+
+		server, _ := setupIssuer(t)
+
+		built, err := New(context.Background(), setupAuthorizer(), Config{
+			IssuerURL:  server.URL,
+			Audience:   testAudience,
+			RolesClaim: testRolesClaim,
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, built)
+		assert.Nil(t, built.introspector, "there is nowhere to ask, so nothing is asked")
+	})
+}

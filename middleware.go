@@ -153,8 +153,13 @@ func bearerToken(r *http.Request) string {
 // varyOnAuthorization marks the response as depending on the caller's credentials.
 // Without it a shared cache is free to hand one user's response to the next caller, since the
 // requests differ only by a header it was never told to look at.
+//
+// The cookie is named beside the header because it is the other place a credential arrives from:
+// where the login flow is driven on the server, two callers differ by their session cookie and by
+// nothing else, and a cache varying only on Authorization would see one request.
 func varyOnAuthorization(w http.ResponseWriter) {
 	w.Header().Add("Vary", "Authorization")
+	w.Header().Add("Vary", "Cookie")
 }
 
 // noStore keeps a response describing the caller out of every cache along the way.

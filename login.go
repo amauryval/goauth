@@ -15,7 +15,8 @@ const (
 	CallbackPath = Root + "/callback"
 
 	// LogoutPath is where LogoutHandler is meant to be mounted, relative to the API root.
-	// It answers to POST, so that a cross-site page cannot sign a visitor out by linking to it.
+	// It answers to POST, so that a cross-site page cannot sign a visitor out by linking to it,
+	// and checks the request's origin, so that one cannot do it with a form either.
 	LogoutPath = Root + "/logout"
 )
 
@@ -31,6 +32,10 @@ type BrowserOptions struct {
 
 	// Secret seals the session cookie, at least 32 bytes.
 	Secret []byte
+
+	// RetiredSecrets are secrets that no longer seal anything but still open what they sealed, so
+	// that replacing Secret does not sign every visitor out at once. Each is at least 32 bytes.
+	RetiredSecrets [][]byte
 
 	// PostLoginPath is where a finished login lands when it named no destination, defaulting to
 	// "/". It is a path on this application, never an absolute URL.
@@ -62,6 +67,16 @@ func WithBrowser(redirectURL string, secret []byte, options ...BrowserOption) Op
 
 		s.browser = browser
 	}
+}
+
+// WithRetiredSecrets keeps opening the sessions an earlier secret sealed, so that replacing the
+// cookie secret does not sign every visitor out at once. Each secret must be at least 32 bytes.
+//
+// A retired secret opens sessions until they expire or are next written, so it is kept for as long
+// as a session may live and dropped after: one kept for ever would leave a leaked secret usable for
+// ever, which is the thing rotating was meant to end.
+func WithRetiredSecrets(secrets ...[]byte) BrowserOption {
+	return func(o *BrowserOptions) { o.RetiredSecrets = secrets }
 }
 
 // WithPostLoginPath is where a finished login lands when it named no destination, defaulting to

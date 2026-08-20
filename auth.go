@@ -57,13 +57,14 @@ func New(ctx context.Context, settings Settings, logger types.Logger) (*Auth, er
 // It contacts the issuer to discover its public keys, so it fails when the provider is unreachable.
 func newVerified(ctx context.Context, settings Settings, selected provider.Provider, logger types.Logger) (*Auth, error) {
 	tokenVerifier, err := verifier.New(ctx, settings.authorizer(), verifier.Config{
-		IssuerURL:         settings.IssuerURL(),
-		Audience:          settings.Audience(),
-		RolesClaim:        selected.RolesClaim(),
-		RolesFromUserInfo: selected.RolesFromUserInfo(),
-		ClientSecret:      settings.ClientSecret(),
-		IntrospectionTTL:  settings.IntrospectionTTL(),
-		Logger:            logger,
+		IssuerURL:            settings.IssuerURL(),
+		Audience:             settings.Audience(),
+		RolesClaim:           selected.RolesClaim(),
+		RolesFromUserInfo:    selected.RolesFromUserInfo(),
+		ClientSecret:         settings.ClientSecret(),
+		RequireIntrospection: settings.RequireIntrospection(),
+		IntrospectionTTL:     settings.IntrospectionTTL(),
+		Logger:               logger,
 	})
 	if err != nil {
 		return nil, err
@@ -99,6 +100,7 @@ func (a *Auth) driveBrowserFlow(settings Settings, tokenVerifier *verifier.Verif
 		RedirectURL:     options.RedirectURL,
 		Scopes:          selected.Scopes(),
 		Secret:          options.Secret,
+		RetiredSecrets:  options.RetiredSecrets,
 		InsecureCookies: options.InsecureCookies,
 		PostLoginPath:   options.PostLoginPath,
 		PostLogoutURL:   options.PostLogoutURL,

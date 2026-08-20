@@ -47,8 +47,8 @@ type ClientConfig struct {
 // The caller decides the API root they hang from, by passing the router of that subtree.
 //
 // The login endpoints are only mounted where the deployment asked for the browser flow. Logout
-// answers to POST, so that a cross-site page cannot sign a visitor out by linking to it; login and
-// callback answer to GET, being navigations the browser is sent through.
+// answers to POST and checks the request's origin, so that no other site can sign a visitor out;
+// login and callback answer to GET, being navigations the browser is sent through.
 func (a *Auth) RegisterRoutes(router Router) {
 	router.Get(ConfigPath, a.ConfigHandler())
 	router.Get(SessionPath, a.SessionHandler())

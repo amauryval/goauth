@@ -21,7 +21,9 @@ This has consequences the rest of the design bends to:
 -   **There is no way to decline asking.** An issuer advertising an `introspection_endpoint` is
     asked. The only deployment that does not ask is one whose issuer advertises nowhere to ask,
     which is the issuer's statement about itself rather than a setting here, and it is logged
-    loudly at every start.
+    loudly at every start. `RequireIntrospection` turns that warning into a refusal to build the
+    verifier at all: the setting cannot ask for less asking, only for the deployment to fail rather
+    than run without the issuer's word.
 -   **No answer is not a no.** An issuer that cannot be reached yields `types.ErrAuthorization` and
     a `503`. Not knowing whether someone is still signed in is an outage; treating it as a
     revocation would log everyone out the moment the provider hiccups.
@@ -75,7 +77,10 @@ authorization code flow with PKCE and holds the tokens; this module only verifie
 
     What it holds is what it reads: the two tokens, and the ID token only because a provider wants
     it back as a logout hint. It carries no lifetime of its own — how long a sign in stays good is
-    how long the provider keeps honouring the refresh token. Cookie names, paths and the SameSite
+    how long the provider keeps honouring the refresh token. The sealing secret can be replaced
+    without signing anyone out: the sealer holds one cipher per declared secret, the first sealing
+    and all of them opening, so a retired secret keeps opening what it sealed until those sessions
+    are gone. Cookie names, paths and the SameSite
     policy are not settings, because nothing needed them to be.
 -   `types` — `Role`, `Decision`, `Authorizer`, `TokenVerifier`, `UserInfo`, `SessionInfo`,
     `Logger`.

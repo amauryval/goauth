@@ -24,10 +24,28 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
+      - name: Format
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: Tidy
+        run: go mod tidy -diff
+
+      - name: Vet
+        run: go vet ./...
+
+      # The demo path only exists under the authdemo tag, so it needs a run of its own.
+      - name: Vet (authdemo)
+        run: go vet -tags authdemo ./...
+
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
 
-      # The demo path only exists under the authdemo tag, so it needs a run of its own.
       - name: Test (authdemo)
         run: go test -race -tags authdemo ./...
+
+      # The signing keys, the JWT parsing and the token exchange all live in dependencies, so a
+      # vulnerability in one of them is a vulnerability here. govulncheck reports the ones this
+      # module actually reaches, rather than every advisory touching a module in the graph.
+      - name: Vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 

@@ -138,6 +138,9 @@ func Test_originOf(t *testing.T) {
 // Test_Flow_Origin pins that the application's own origin is derived from the redirect URL, which
 // a deployment already has to state and which already has to be this application. Nothing else is
 // asked of it, and nothing else is trusted.
+//
+// A redirect URL yielding no origin never reaches here: New refuses it, since an empty origin would
+// match a request stating none and turn the check below into a formality.
 func Test_Flow_Origin(t *testing.T) {
 	t.Parallel()
 

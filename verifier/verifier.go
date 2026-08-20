@@ -72,6 +72,15 @@ type Config struct {
 	// RFC 7662 requires. A client issued none identifies itself by its id alone.
 	ClientSecret string
 
+	// RequireIntrospection refuses to build a verifier whose issuer advertises no introspection
+	// endpoint, rather than carrying on without one.
+	//
+	// Without that endpoint the issuer is never asked whether a token is one it still stands
+	// behind, so a disabled account, a changed password and an ended session all keep working
+	// until the token expires on its own. That is reported at startup either way, but a warning
+	// is a line in a log: this turns it into a deployment that does not start.
+	RequireIntrospection bool
+
 	// IntrospectionTTL reuses the issuer's answer about a token for that long, trading how quickly
 	// its decisions land against a round trip per request.
 	//
@@ -140,7 +149,7 @@ func New(ctx context.Context, authorizer types.Authorizer, config Config) (*Veri
 		SupportedSigningAlgs: signingAlgorithms,
 	})
 
-	return newVerifier(provider, tokens, authorizer, config), nil
+	return newVerifier(provider, tokens, authorizer, config)
 }
 
 // issuerContext carries the HTTP client every request to the issuer must go through.
@@ -155,13 +164,16 @@ func issuerContext(ctx context.Context, client *http.Client) context.Context {
 }
 
 // newVerifier assembles a Verifier from an already built token verifier.
-func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authorizer types.Authorizer, config Config) *Verifier {
+func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authorizer types.Authorizer, config Config) (*Verifier, error) {
 	logger := config.Logger
 	if logger == nil {
 		logger = types.DiscardLogger{}
 	}
 
-	asker := buildIntrospector(provider, config, logger)
+	asker, err := buildIntrospector(provider, config, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	introspectionTTL := config.IntrospectionTTL
 	if introspectionTTL == 0 {
@@ -180,7 +192,7 @@ func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authoriz
 		introspections:    newLookupCache[[]string](introspectionTTL, maxCachedUserInfo),
 		logger:            logger,
 		now:               time.Now,
-	}
+	}, nil
 }
 
 // buildIntrospector prepares the question put to the issuer about every token.
@@ -188,8 +200,9 @@ func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authoriz
 // There is no way to decline asking. The only deployment that does not ask is one whose issuer
 // advertises nowhere to ask, and that is the issuer's statement about itself rather than a choice
 // made here. It is reported loudly, because it is the one case where this module cannot tell a
-// live account from a deleted one.
-func buildIntrospector(provider *oidc.Provider, config Config, logger types.Logger) *introspector {
+// live account from a deleted one — and a deployment that cannot live with that says so with
+// RequireIntrospection, which turns the warning into a refusal to start.
+func buildIntrospector(provider *oidc.Provider, config Config, logger types.Logger) (*introspector, error) {
 	var endpoint string
 
 	if provider != nil {
@@ -201,9 +214,13 @@ func buildIntrospector(provider *oidc.Provider, config Config, logger types.Logg
 	}
 
 	if endpoint == "" {
+		if config.RequireIntrospection {
+			return nil, errors.New("the issuer advertises no introspection endpoint, so it cannot be asked whether a token is still active: drop the introspection requirement to run without it, knowing a disabled account keeps working until its token expires")
+		}
+
 		logger.Warn("auth: the issuer advertises no introspection endpoint, so it cannot be asked whether a token is still active: a disabled account keeps working until its token expires")
 
-		return nil
+		return nil, nil
 	}
 
 	return &introspector{
@@ -211,7 +228,7 @@ func buildIntrospector(provider *oidc.Provider, config Config, logger types.Logg
 		clientID:     config.Audience,
 		clientSecret: config.ClientSecret,
 		client:       config.HTTPClient,
-	}
+	}, nil
 }
 
 // tokenClaims are the access token claims an authorization policy can rule on.

@@ -29,6 +29,10 @@ const (
 	// AudienceEnv names the environment variable a host reads for this application's client Id.
 	AudienceEnv = "AUTH_AUDIENCE"
 
+	// RequireIntrospectionEnv names the environment variable a host reads to demand that the issuer
+	// support introspection.
+	RequireIntrospectionEnv = "AUTH_REQUIRE_INTROSPECTION"
+
 	// AdminRoleEnv names the environment variable a host reads for the provider name of the admin role.
 	AdminRoleEnv = "AUTH_ADMIN_ROLE"
 
@@ -50,6 +54,7 @@ type Settings struct {
 	adminRole     string
 	guestRole     string
 	clientSecret  string
+	requireIntro  bool
 	introspectTTL time.Duration
 	browser       *BrowserOptions
 }
@@ -95,6 +100,17 @@ func WithGuestRole(name string) Option {
 // issued none identifies itself by its id alone.
 func WithClientSecret(secret string) Option {
 	return func(s *Settings) { s.clientSecret = secret }
+}
+
+// WithRequireIntrospection refuses to start against an issuer advertising no introspection
+// endpoint, rather than running without one.
+//
+// Introspection is how this module asks the issuer whether a token is one it still stands behind.
+// Without it a disabled account, a changed password and an ended session all keep working until
+// the token expires on its own, which for a session held by a refresh token is never. That is
+// warned about at startup either way; this makes it a deployment that does not start.
+func WithRequireIntrospection(required bool) Option {
+	return func(s *Settings) { s.requireIntro = required }
 }
 
 // WithIntrospectionTTL reuses the issuer's answer about a token for that long, trading how quickly
@@ -163,6 +179,11 @@ func (s Settings) ClientSecret() string {
 	return s.clientSecret
 }
 
+// RequireIntrospection reports whether an issuer advertising no introspection endpoint is refused.
+func (s Settings) RequireIntrospection() bool {
+	return s.requireIntro
+}
+
 // IntrospectionTTL returns how long the issuer's answer is reused for.
 func (s Settings) IntrospectionTTL() time.Duration {
 	return s.introspectTTL
@@ -197,6 +218,10 @@ func (s Settings) rejectProviderSettings() error {
 
 	if s.Audience() != "" {
 		configured = append(configured, AudienceEnv)
+	}
+
+	if s.RequireIntrospection() {
+		configured = append(configured, RequireIntrospectionEnv)
 	}
 
 	if s.Browser() != nil {

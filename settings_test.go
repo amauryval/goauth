@@ -303,3 +303,25 @@ func Test_Settings_authorizer(t *testing.T) {
 		})
 	}
 }
+
+// Test_Settings_RequireIntrospection pins the option and the contradiction it cannot sit beside:
+// demanding that the issuer be asked about every token, while demo mode verifies none at all.
+func Test_Settings_RequireIntrospection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("it is off unless the deployment asks for it", func(t *testing.T) {
+		t.Parallel()
+
+		assert.False(t, NewSettings().RequireIntrospection())
+		assert.True(t, NewSettings(WithRequireIntrospection(true)).RequireIntrospection())
+	})
+
+	t.Run("demo mode refuses it", func(t *testing.T) {
+		t.Parallel()
+
+		err := NewSettings(WithDemo(true), WithRequireIntrospection(true)).rejectProviderSettings()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), RequireIntrospectionEnv)
+	})
+}

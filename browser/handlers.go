@@ -130,9 +130,22 @@ func (f *Flow) CallbackHandler() http.HandlerFunc {
 //
 // Dropping the cookie ends the session for this browser. It does not revoke the tokens at the
 // provider, which is what the RP initiated logout redirect is for.
+//
+// It makes the same origin check the rest of the module makes, rather than resting on answering to
+// POST alone: POST keeps a cross-site page from signing a visitor out by linking to it, but not
+// from doing so with a form it submits itself. The response clears the cookie whether or not the
+// request carried one, so an unchecked logout is a sign out any site can force.
 func (f *Flow) LogoutHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		noStore(w)
+
+		if !f.sameOrigin(r) {
+			f.logger.Warn("auth: refused a sign out this application did not ask for",
+				"method", r.Method, "origin", r.Header.Get("Origin"))
+			http.Error(w, "this request did not come from this application", http.StatusForbidden)
+
+			return
+		}
 
 		var current session
 

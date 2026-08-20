@@ -140,6 +140,16 @@ func Test_New(t *testing.T) {
 			wantErr: "redirect URL is required",
 		},
 		{
+			name:    "a relative redirect URL is refused",
+			adjust:  func(c *Config) { c.RedirectURL = "/auth/callback" },
+			wantErr: "redirect URL must be absolute",
+		},
+		{
+			name:    "a redirect URL naming no host is refused",
+			adjust:  func(c *Config) { c.RedirectURL = "https:///auth/callback" },
+			wantErr: "redirect URL must be absolute",
+		},
+		{
 			name:    "no id token verification is refused",
 			adjust:  func(c *Config) { c.IDTokens = nil },
 			wantErr: "id token verifier is required",
@@ -491,6 +501,16 @@ func Test_Flow_Token(t *testing.T) {
 	})
 }
 
+// logoutRequest builds the sign out a browser on this application makes, stating the origin the
+// flow checks: a logout naming no origin is one the flow refuses, which Test_Flow_LogoutHandler_
+// CrossSite pins.
+func logoutRequest() *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	request.Header.Set("Origin", "https://app.example.com")
+
+	return request
+}
+
 func Test_Flow_LogoutHandler(t *testing.T) {
 	t.Parallel()
 
@@ -501,7 +521,7 @@ func Test_Flow_LogoutHandler(t *testing.T) {
 		flow := setupFlow(t, server, nil)
 
 		recorder := httptest.NewRecorder()
-		flow.LogoutHandler()(recorder, httptest.NewRequest(http.MethodPost, "/auth/logout", nil))
+		flow.LogoutHandler()(recorder, logoutRequest())
 
 		assert.Equal(t, http.StatusNoContent, recorder.Code)
 
@@ -520,7 +540,7 @@ func Test_Flow_LogoutHandler(t *testing.T) {
 		})
 
 		recorder := httptest.NewRecorder()
-		flow.LogoutHandler()(recorder, httptest.NewRequest(http.MethodPost, "/auth/logout", nil))
+		flow.LogoutHandler()(recorder, logoutRequest())
 
 		require.Equal(t, http.StatusFound, recorder.Code)
 
@@ -645,7 +665,7 @@ func Test_Flow_LogoutHandler_Revocation(t *testing.T) {
 
 		flow := setupFlow(t, server, func(c *Config) { c.Endpoints.Revocation = revocation.URL })
 
-		request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		request := logoutRequest()
 		request.AddCookie(sealedSession(t, flow, session{
 			AccessToken:  "an-access-token",
 			RefreshToken: "a-refresh-token",
@@ -665,7 +685,7 @@ func Test_Flow_LogoutHandler_Revocation(t *testing.T) {
 		server, _ := setupIssuer(t, nil)
 		flow := setupFlow(t, server, nil)
 
-		request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		request := logoutRequest()
 		request.AddCookie(sealedSession(t, flow, session{RefreshToken: "a-refresh-token"}))
 
 		recorder := httptest.NewRecorder()
@@ -685,7 +705,7 @@ func Test_Flow_LogoutHandler_Revocation(t *testing.T) {
 
 		flow := setupFlow(t, server, func(c *Config) { c.Endpoints.Revocation = revocation.URL })
 
-		request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		request := logoutRequest()
 		request.AddCookie(sealedSession(t, flow, session{RefreshToken: "a-refresh-token"}))
 
 		recorder := httptest.NewRecorder()
@@ -707,7 +727,7 @@ func Test_Flow_LogoutHandler_Revocation(t *testing.T) {
 			c.PostLogoutURL = "https://app.example.com/"
 		})
 
-		request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		request := logoutRequest()
 		request.AddCookie(sealedSession(t, flow, session{IDToken: "an-id-token"}))
 
 		recorder := httptest.NewRecorder()
@@ -735,4 +755,89 @@ func completeLogin(t *testing.T, flow *Flow) *httptest.ResponseRecorder {
 	flow.CallbackHandler()(recorder, request)
 
 	return recorder
+}
+
+// Test_Flow_LogoutHandler_CrossSite pins that signing out is a write like any other: answering to
+// POST keeps a cross-site page from doing it with a link, not with a form it submits itself, and
+// the response clears the cookie whether or not the request carried one.
+func Test_Flow_LogoutHandler_CrossSite(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		origin    string
+		fetchSite string
+	}{
+		{name: "a sign out from another site is refused", origin: "https://evil.example.com"},
+		{name: "a sign out stating no origin is refused"},
+		{name: "the browser saying cross-site settles it", origin: "https://app.example.com", fetchSite: "cross-site"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, _ := setupIssuer(t, nil)
+			flow := setupFlow(t, server, nil)
+
+			request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+
+			if c.origin != "" {
+				request.Header.Set("Origin", c.origin)
+			}
+
+			if c.fetchSite != "" {
+				request.Header.Set("Sec-Fetch-Site", c.fetchSite)
+			}
+
+			request.AddCookie(sealedSession(t, flow, session{AccessToken: "an-access-token"}))
+
+			recorder := httptest.NewRecorder()
+			flow.LogoutHandler()(recorder, request)
+
+			assert.Equal(t, http.StatusForbidden, recorder.Code)
+			assert.Empty(t, recorder.Result().Cookies(), "a refused sign out must not clear the session")
+		})
+	}
+}
+
+// Test_Flow_SecretRotation pins the rotation from the outside: a browser holding a session sealed
+// by the previous secret keeps it, and hands over the same access token, while a deployment that
+// dropped that secret signs it out. It is what makes replacing the secret an operation rather than
+// an outage.
+func Test_Flow_SecretRotation(t *testing.T) {
+	t.Parallel()
+
+	const retiredSecret = "a-retired-secret-of-at-least-32-bytes"
+
+	server, _ := setupIssuer(t, nil)
+
+	before := setupFlow(t, server, func(c *Config) { c.Secret = []byte(retiredSecret) })
+	established := sealedSession(t, before, session{
+		AccessToken: "an-access-token",
+		Expiry:      time.Now().Add(time.Hour),
+	})
+
+	t.Run("the retired secret is still honoured", func(t *testing.T) {
+		t.Parallel()
+
+		after := setupFlow(t, server, func(c *Config) { c.RetiredSecrets = [][]byte{[]byte(retiredSecret)} })
+
+		request := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
+		request.AddCookie(established)
+
+		assert.Equal(t, "an-access-token", after.Token(httptest.NewRecorder(), request))
+	})
+
+	t.Run("dropping it signs the session out", func(t *testing.T) {
+		t.Parallel()
+
+		after := setupFlow(t, server, nil)
+
+		request := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
+		request.AddCookie(established)
+
+		assert.Empty(t, after.Token(httptest.NewRecorder(), request),
+			"a secret the deployment no longer declares must open nothing")
+	})
 }

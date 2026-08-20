@@ -37,8 +37,8 @@ async function session() {
 
 `roles` is absent rather than empty when there are none, hence the `= []` default.
 
-The response is `Cache-Control: no-store` and `Vary: Authorization`, so neither the browser nor any
-proxy hands one visitor's session to another.
+The response is `Cache-Control: no-store` and `Vary: Authorization, Cookie`, so neither the browser
+nor any proxy hands one visitor's session to another.
 
 ## Which mode is this deployment in?
 
@@ -99,7 +99,10 @@ Things worth knowing:
 
 ### Signing out
 
-Logout answers to `POST`, so that a cross-site page cannot sign a visitor out by linking to it.
+Logout answers to `POST`, so that a cross-site page cannot sign a visitor out by linking to it, and
+checks the request's origin, so that one cannot do it with a form it submits itself either. Both
+calls below are made from your own pages, so the browser states that origin on its own — there is
+nothing for the frontend to attach.
 Which call to make depends on whether the deployment configured a provider-wide logout:
 
 ```js

@@ -67,6 +67,14 @@ type Config struct {
 	// its holder mint sessions, so it belongs wherever the deployment keeps its other secrets.
 	Secret []byte
 
+	// RetiredSecrets are secrets that no longer seal anything but still open what they sealed, so
+	// that replacing Secret does not sign every visitor out at once. Each is at least 32 bytes.
+	//
+	// A retired secret opens sessions until they expire or are next written, so it is kept for as
+	// long as a session may live and dropped after. Keeping one for ever would leave a leaked
+	// secret usable for ever, which is the thing rotating was meant to end.
+	RetiredSecrets [][]byte
+
 	// InsecureCookies drops the Secure attribute, for a local stack served over http.
 	// It must never be set on a deployment: the session then travels in cleartext.
 	InsecureCookies bool
@@ -117,6 +125,15 @@ func New(config Config) (*Flow, error) {
 		return nil, errors.New("a redirect URL is required")
 	}
 
+	// The origin the CSRF check compares against is derived from this URL and from nothing else, so
+	// a redirect URL that names no origin would leave that comparison with nothing to hold: a
+	// request stating no origin would match the empty one and be taken for our own. Demanding an
+	// absolute URL here is what keeps sameOrigin meaningful, beside being what the provider needs.
+	origin := originOf(config.RedirectURL)
+	if origin == "" {
+		return nil, fmt.Errorf("the redirect URL must be absolute, with a scheme and a host, got %q", config.RedirectURL)
+	}
+
 	if config.Endpoints.Authorization == "" || config.Endpoints.Token == "" {
 		return nil, errors.New("the issuer endpoints are required")
 	}
@@ -125,7 +142,7 @@ func New(config Config) (*Flow, error) {
 		return nil, errors.New("an id token verifier is required")
 	}
 
-	sealer, err := newSealer(config.Secret)
+	sealer, err := newSealer(config.Secret, config.RetiredSecrets...)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +173,7 @@ func New(config Config) (*Flow, error) {
 			},
 		},
 		idTokens:        config.IDTokens,
-		origin:          originOf(config.RedirectURL),
+		origin:          origin,
 		revocationURL:   config.Endpoints.Revocation,
 		sealer:          sealer,
 		insecureCookies: config.InsecureCookies,

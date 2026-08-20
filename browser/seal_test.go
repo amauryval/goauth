@@ -121,3 +121,77 @@ func flip(character byte) byte {
 
 	return 'A'
 }
+
+// Test_sealer_Rotation pins what replacing the cookie secret costs: nothing to the visitors whose
+// sessions the old one sealed, for as long as the deployment keeps it around.
+func Test_sealer_Rotation(t *testing.T) {
+	t.Parallel()
+
+	const (
+		retiredSecret  = "a-retired-secret-of-at-least-32-bytes"
+		strangerSecret = "a-stranger-secret-of-at-least-32-bytes"
+	)
+
+	retired, err := newSealer([]byte(retiredSecret))
+	require.NoError(t, err)
+
+	rotated, err := newSealer([]byte(testSecret), []byte(retiredSecret))
+	require.NoError(t, err)
+
+	t.Run("a session the retired secret sealed still opens", func(t *testing.T) {
+		t.Parallel()
+
+		sealed, err := retired.seal(sessionPurpose, []byte("a-token"))
+		require.NoError(t, err)
+
+		opened, err := rotated.open(sessionPurpose, sealed)
+
+		require.NoError(t, err)
+		assert.Equal(t, []byte("a-token"), opened)
+	})
+
+	t.Run("new sessions are sealed with the current secret alone", func(t *testing.T) {
+		t.Parallel()
+
+		sealed, err := rotated.seal(sessionPurpose, []byte("a-token"))
+		require.NoError(t, err)
+
+		_, err = retired.open(sessionPurpose, sealed)
+
+		assert.ErrorIs(t, err, errCookie, "the retired secret must not open what it did not seal")
+	})
+
+	t.Run("the purpose still binds under a retired secret", func(t *testing.T) {
+		t.Parallel()
+
+		sealed, err := retired.seal(pendingPurpose, []byte("a-token"))
+		require.NoError(t, err)
+
+		_, err = rotated.open(sessionPurpose, sealed)
+
+		assert.ErrorIs(t, err, errCookie)
+	})
+
+	t.Run("a secret the deployment never declared opens nothing", func(t *testing.T) {
+		t.Parallel()
+
+		stranger, err := newSealer([]byte(strangerSecret))
+		require.NoError(t, err)
+
+		sealed, err := stranger.seal(sessionPurpose, []byte("a-token"))
+		require.NoError(t, err)
+
+		_, err = rotated.open(sessionPurpose, sealed)
+
+		assert.ErrorIs(t, err, errCookie)
+	})
+
+	t.Run("a short retired secret is refused, and named", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := newSealer([]byte(testSecret), []byte(retiredSecret), []byte("too-short"))
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retired cookie secret 2")
+	})
+}

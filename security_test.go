@@ -94,6 +94,8 @@ func Test_CachingHeaders(t *testing.T) {
 
 			assert.Equal(t, c.wantCode, recorder.Code)
 			assert.Contains(t, recorder.Header().Values("Vary"), "Authorization")
+			assert.Contains(t, recorder.Header().Values("Vary"), "Cookie",
+				"a session arriving in a cookie is a credential a shared cache must vary on too")
 		})
 	}
 }
