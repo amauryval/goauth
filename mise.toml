@@ -1,7 +1,7 @@
 [env]
 
 [tools]
-go = "1.26.7"
+go = "1.27"
 
 # The demo path only exists under the authdemo tag, so it is exercised by a second run.
 [tasks.test]
