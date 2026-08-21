@@ -16,6 +16,8 @@ func setupLogger() types.Logger {
 }
 
 func Test_New(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name         string
 		demo         bool
@@ -90,7 +92,9 @@ func Test_New(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			settings := NewSettings(c.demo, c.providerName, c.issuerURL, c.audience, c.adminRole, c.guestRole)
+			t.Parallel()
+
+			settings := NewSettings(WithDemo(c.demo), WithProvider(c.providerName), WithIssuer(c.issuerURL), WithAudience(c.audience), WithAdminRole(c.adminRole), WithGuestRole(c.guestRole))
 
 			built, err := New(context.Background(), settings, setupLogger())
 
@@ -109,6 +113,8 @@ func Test_New(t *testing.T) {
 }
 
 func Test_NewSettings(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name             string
 		demo             bool
@@ -159,7 +165,9 @@ func Test_NewSettings(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			settings := NewSettings(c.demo, c.providerName, c.issuerURL, c.audience, c.adminRole, c.guestRole)
+			t.Parallel()
+
+			settings := NewSettings(WithDemo(c.demo), WithProvider(c.providerName), WithIssuer(c.issuerURL), WithAudience(c.audience), WithAdminRole(c.adminRole), WithGuestRole(c.guestRole))
 
 			assert.Equal(t, c.wantDemo, settings.Demo())
 			assert.Equal(t, c.wantProviderName, settings.ProviderName())
@@ -172,6 +180,8 @@ func Test_NewSettings(t *testing.T) {
 }
 
 func Test_Settings_provider(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name           string
 		providerName   string
@@ -190,13 +200,13 @@ func Test_Settings_provider(t *testing.T) {
 			name:           "pocket id reads the groups claim and asks for its scope",
 			providerName:   "pocketid",
 			wantRolesClaim: "groups",
-			wantScopes:     []string{"openid", "profile", "email", "groups"},
+			wantScopes:     []string{"openid", "profile", "email", "offline_access", "groups"},
 		},
 		{
 			name:           "the provider name is read whatever its case",
 			providerName:   "PocketID",
 			wantRolesClaim: "groups",
-			wantScopes:     []string{"openid", "profile", "email", "groups"},
+			wantScopes:     []string{"openid", "profile", "email", "offline_access", "groups"},
 		},
 		{
 			name:        "no provider named",
@@ -213,7 +223,9 @@ func Test_Settings_provider(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			settings := NewSettings(false, c.providerName, "", "", "", "")
+			t.Parallel()
+
+			settings := NewSettings(WithProvider(c.providerName))
 
 			selected, err := settings.provider()
 
@@ -232,6 +244,8 @@ func Test_Settings_provider(t *testing.T) {
 }
 
 func Test_Settings_authorizer(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name           string
 		adminRole      string
@@ -277,7 +291,9 @@ func Test_Settings_authorizer(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			settings := NewSettings(false, "", "", "", c.adminRole, c.guestRole)
+			t.Parallel()
+
+			settings := NewSettings(WithAdminRole(c.adminRole), WithGuestRole(c.guestRole))
 
 			decision, err := settings.authorizer().Authorize(context.Background(), &types.UserInfo{Roles: c.claimed})
 
@@ -286,4 +302,26 @@ func Test_Settings_authorizer(t *testing.T) {
 			assert.Equal(t, c.wantRoles, decision.Roles)
 		})
 	}
+}
+
+// Test_Settings_RequireIntrospection pins the option and the contradiction it cannot sit beside:
+// demanding that the issuer be asked about every token, while demo mode verifies none at all.
+func Test_Settings_RequireIntrospection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("it is off unless the deployment asks for it", func(t *testing.T) {
+		t.Parallel()
+
+		assert.False(t, NewSettings().RequireIntrospection())
+		assert.True(t, NewSettings(WithRequireIntrospection(true)).RequireIntrospection())
+	})
+
+	t.Run("demo mode refuses it", func(t *testing.T) {
+		t.Parallel()
+
+		err := NewSettings(WithDemo(true), WithRequireIntrospection(true)).rejectProviderSettings()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), RequireIntrospectionEnv)
+	})
 }

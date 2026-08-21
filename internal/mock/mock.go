@@ -1,9 +1,10 @@
+// Package mock holds the fixtures the module's own tests share: a user, and a TokenVerifier
+// returning whatever a test wants verification to have concluded.
 package mock
 
 import (
 	"context"
 
-	"github.com/amauryval/goauth/authorization"
 	"github.com/amauryval/goauth/types"
 )
 
@@ -19,21 +20,16 @@ func SetupMockUser() *types.UserInfo {
 	}
 }
 
-// SetupAuthorizer returns an authorizer granting the admin role to the mock user.
-func SetupAuthorizer() types.Authorizer {
-	return authorization.FromTokenNames(map[string]types.Role{MockRole: types.RoleAdmin})
-}
-
-// MockVerifier is a TokenVerifier returning a canned result, for middleware tests.
+// Verifier is a TokenVerifier returning a canned result, for middleware tests.
 // It records the token it received, so callers can assert how it was extracted.
-type MockVerifier struct {
+type Verifier struct {
 	Info          types.SessionInfo
 	Err           error
 	ReceivedToken string
 }
 
 // Verify records the token and returns the configured result.
-func (m *MockVerifier) Verify(_ context.Context, rawToken string) (types.SessionInfo, error) {
+func (m *Verifier) Verify(_ context.Context, rawToken string) (types.SessionInfo, error) {
 	m.ReceivedToken = rawToken
 
 	return m.Info, m.Err

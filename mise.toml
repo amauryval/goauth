@@ -1,14 +1,31 @@
 [env]
 
 [tools]
-go = "1.26.4"
-golangci-lint = "2.12.2"
-pre-commit = "4.6.0"
+go = "1.26.7"
 
 # The demo path only exists under the authdemo tag, so it is exercised by a second run.
-[tasks.test-auth]
+[tasks.test]
 run = """
-go test ./... -cover
-go test -tags authdemo ./...
+go test -race ./... -cover
+go test -race -tags authdemo ./...
 """
-description = "Run auth Go tests with coverage"
+description = "Run the tests, with and without the demo build tag"
+
+[tasks.vet]
+run = """
+test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+go mod tidy -diff
+go vet ./...
+go vet -tags authdemo ./...
+"""
+description = "Formatting and go vet, with and without the demo build tag"
+
+# The signing keys, the JWT parsing and the token exchange all live in dependencies, so a
+# vulnerability in one of them is a vulnerability here.
+[tasks.vulns]
+run = "go run golang.org/x/vuln/cmd/govulncheck@latest ./..."
+description = "Report the known vulnerabilities this module actually reaches"
+
+[tasks.check]
+depends = ["vet", "test", "vulns"]
+description = "Everything CI runs"

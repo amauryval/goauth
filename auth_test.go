@@ -13,6 +13,8 @@ import (
 )
 
 func Test_NewWithVerifier(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name        string
 		noVerifier  bool
@@ -37,9 +39,11 @@ func Test_NewWithVerifier(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			var verifier types.TokenVerifier
 			if !c.noVerifier {
-				verifier = &mock.MockVerifier{}
+				verifier = &mock.Verifier{}
 			}
 
 			var logger types.Logger
@@ -65,6 +69,8 @@ func Test_NewWithVerifier(t *testing.T) {
 }
 
 func Test_newVerified(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name      string
 		issuerURL string
@@ -96,7 +102,9 @@ func Test_newVerified(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			settings := NewSettings(false, c.selected.Name(), c.issuerURL, c.audience, "", "")
+			t.Parallel()
+
+			settings := NewSettings(WithProvider(c.selected.Name()), WithIssuer(c.issuerURL), WithAudience(c.audience))
 
 			built, err := newVerified(context.Background(), settings, c.selected, setupLogger())
 

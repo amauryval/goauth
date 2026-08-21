@@ -2,6 +2,14 @@ package verifier
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +21,8 @@ import (
 )
 
 func Test_roleNames(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name  string
 		value any
@@ -41,12 +51,16 @@ func Test_roleNames(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			assert.Equal(t, c.want, roleNames(c.value))
 		})
 	}
 }
 
 func Test_Verifier_Verify_ProviderRoles(t *testing.T) {
+	t.Parallel()
+
 	server, key := setupIssuer(t)
 
 	cases := []struct {
@@ -90,6 +104,8 @@ func Test_Verifier_Verify_ProviderRoles(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			built, err := New(context.Background(), authorization.FromToken(types.RoleAdmin, types.RoleGuest), Config{
 				IssuerURL:  server.URL,
 				Audience:   testAudience,
@@ -113,6 +129,8 @@ func Test_Verifier_Verify_ProviderRoles(t *testing.T) {
 }
 
 func Test_Verifier_Verify_UserInfoRoles(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name           string
 		served         map[string]any
@@ -121,7 +139,7 @@ func Test_Verifier_Verify_UserInfoRoles(t *testing.T) {
 	}{
 		{
 			name:           "the groups the endpoint serves are granted",
-			served:         map[string]any{"groups": []any{"guest"}},
+			served:         map[string]any{"sub": "some-subject", "groups": []any{"guest"}},
 			wantAuthorized: true,
 			wantRoles:      []types.Role{types.RoleGuest},
 		},
@@ -133,6 +151,8 @@ func Test_Verifier_Verify_UserInfoRoles(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			server, key, userInfo := setupIssuerWithUserInfo(t)
 			for name, value := range c.served {
 				userInfo[name] = value
@@ -155,6 +175,217 @@ func Test_Verifier_Verify_UserInfoRoles(t *testing.T) {
 			assert.True(t, info.LoggedIn)
 			assert.Equal(t, c.wantAuthorized, info.Authorized)
 			assert.Equal(t, c.wantRoles, info.Roles)
+		})
+	}
+}
+
+// setupCountingIssuer starts an issuer whose UserInfo endpoint answers with the given status and
+// claims, and counts how many times it was asked. Counting is how a test tells a cached lookup
+// from one that went back to the provider.
+func setupCountingIssuer(t *testing.T, status int, claims map[string]any) (*httptest.Server, *rsa.PrivateKey, *atomic.Int64) {
+	t.Helper()
+
+	var calls atomic.Int64
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                                server.URL,
+			"jwks_uri":                              server.URL + "/keys",
+			"userinfo_endpoint":                     server.URL + "/userinfo",
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	})
+
+	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(claims)
+	})
+
+	mux.HandleFunc("/keys", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"keys": []map[string]string{{
+				"kty": "RSA",
+				"alg": "RS256",
+				"use": "sig",
+				"kid": testKeyID,
+				"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
+			}},
+		})
+	})
+
+	return server, key, &calls
+}
+
+// setupUserInfoVerifier builds a verifier reading its roles from the UserInfo endpoint, holding
+// them for the given TTL. The cache is replaced rather than configured: how long a lookup is
+// reused is the package's decision, not a deployment's, so only a test states another value.
+func setupUserInfoVerifier(t *testing.T, issuerURL string, ttl time.Duration) *Verifier {
+	t.Helper()
+
+	built, err := New(context.Background(), authorization.FromToken(types.RoleAdmin, types.RoleGuest), Config{
+		IssuerURL:         issuerURL,
+		Audience:          testAudience,
+		RolesClaim:        "groups",
+		RolesFromUserInfo: true,
+	})
+	require.NoError(t, err)
+
+	built.userInfos = newLookupCache[map[string]any](ttl, maxCachedUserInfo)
+
+	return built
+}
+
+// Test_Verifier_Verify_UserInfoUnavailable pins that a UserInfo lookup is a roles lookup and
+// nothing more: every way it fails is an outage.
+//
+// It is deliberately not where "is this token still good" is decided. That question has an answer
+// in the protocol — introspection — rather than in the status code of a request made for another
+// purpose.
+func Test_Verifier_Verify_UserInfoUnavailable(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusUnauthorized} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+
+			server, key, calls := setupCountingIssuer(t, status, nil)
+			built := setupUserInfoVerifier(t, server.URL, 0)
+
+			claims := setupClaims(server.URL, testAudience, "some-subject", time.Now().Add(time.Hour))
+
+			info, err := built.Verify(context.Background(), setupSignedToken(t, key, claims))
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, types.ErrAuthorization)
+			assert.Equal(t, types.SessionInfo{}, info)
+			assert.Positive(t, calls.Load())
+		})
+	}
+}
+
+// Test_Verifier_Verify_UserInfoNotCachedOnFailure keeps a failed lookup out of the cache, so a
+// recovering provider is seen at once rather than after the TTL.
+func Test_Verifier_Verify_UserInfoNotCachedOnFailure(t *testing.T) {
+	t.Parallel()
+
+	server, key, calls := setupCountingIssuer(t, http.StatusInternalServerError, nil)
+	built := setupUserInfoVerifier(t, server.URL, time.Hour)
+
+	token := setupSignedToken(t, key, setupClaims(server.URL, testAudience, "some-subject", time.Now().Add(time.Hour)))
+
+	_, first := built.Verify(context.Background(), token)
+	_, second := built.Verify(context.Background(), token)
+
+	require.Error(t, first)
+	require.Error(t, second)
+	assert.Equal(t, int64(2), calls.Load())
+}
+
+func Test_Verifier_Verify_UserInfoCaching(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		ttl       time.Duration
+		elapsed   time.Duration
+		wantCalls int64
+	}{
+		{
+			name:      "a second request within the ttl reuses the cached roles",
+			ttl:       time.Hour,
+			wantCalls: 1,
+		},
+		{
+			name:      "the endpoint is asked again once the ttl elapsed",
+			ttl:       time.Minute,
+			elapsed:   2 * time.Minute,
+			wantCalls: 2,
+		},
+		{
+			name:      "a negative ttl asks the endpoint on every request",
+			ttl:       -time.Second,
+			wantCalls: 2,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			served := map[string]any{"sub": "some-subject", "groups": []any{"admin"}}
+
+			server, key, calls := setupCountingIssuer(t, http.StatusOK, served)
+			built := setupUserInfoVerifier(t, server.URL, c.ttl)
+
+			now := time.Now()
+			built.now = func() time.Time { return now }
+
+			token := setupSignedToken(t, key, setupClaims(server.URL, testAudience, "some-subject", now.Add(time.Hour)))
+
+			first, err := built.Verify(context.Background(), token)
+			require.NoError(t, err)
+
+			now = now.Add(c.elapsed)
+
+			second, err := built.Verify(context.Background(), token)
+			require.NoError(t, err)
+
+			assert.Equal(t, c.wantCalls, calls.Load())
+			assert.Equal(t, []types.Role{types.RoleAdmin}, first.Roles)
+			assert.Equal(t, first.Roles, second.Roles)
+		})
+	}
+}
+
+// Test_Verifier_Verify_UserInfoSubjectMismatch pins OpenID Connect Core 5.3.2: roles described for
+// another subject are never granted to the bearer of this token.
+func Test_Verifier_Verify_UserInfoSubjectMismatch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		served map[string]any
+	}{
+		{
+			name:   "the endpoint answers for another subject",
+			served: map[string]any{"sub": "someone-else", "groups": []any{"admin"}},
+		},
+		{
+			name:   "the endpoint answers without a subject at all",
+			served: map[string]any{"groups": []any{"admin"}},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, key, _ := setupCountingIssuer(t, http.StatusOK, c.served)
+			built := setupUserInfoVerifier(t, server.URL, 0)
+
+			claims := setupClaims(server.URL, testAudience, "some-subject", time.Now().Add(time.Hour))
+
+			info, err := built.Verify(context.Background(), setupSignedToken(t, key, claims))
+
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, types.ErrAuthorization, "a mismatched subject is a rejected token, not an outage")
+			assert.Equal(t, types.SessionInfo{}, info)
 		})
 	}
 }

@@ -141,6 +141,8 @@ func setupVerifier(t *testing.T, issuerURL string) *Verifier {
 }
 
 func Test_New(t *testing.T) {
+	t.Parallel()
+
 	server, _ := setupIssuer(t)
 
 	cases := []struct {
@@ -200,6 +202,8 @@ func Test_New(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			var authorizer types.Authorizer
 			if !c.noAuthorizer {
 				authorizer = setupAuthorizer()
@@ -226,6 +230,8 @@ func Test_New(t *testing.T) {
 }
 
 func Test_Verifier_Verify(t *testing.T) {
+	t.Parallel()
+
 	server, key := setupIssuer(t)
 	otherKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -353,9 +359,12 @@ func Test_Verifier_Verify(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			built := setupVerifier(t, server.URL)
 
 			rawToken := "not-a-jwt"
+
 			if !c.malformedToken {
 				issuer := server.URL
 				if c.wrongIssuer {

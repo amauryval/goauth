@@ -5,10 +5,41 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
 	"github.com/amauryval/goauth/types"
+)
+
+const (
+	// userInfoTTL is how long what the UserInfo endpoint said about a token is reused.
+	// It trades the delay a role change takes to be seen against a round trip per request, and is
+	// short enough that a revocation still lands within seconds.
+	userInfoTTL = 30 * time.Second
+
+	// defaultIntrospectionTTL is how long the issuer's answer about a token is reused.
+	//
+	// It is the trade this module makes between the issuer having the last word and the issuer
+	// being on the path of every request. At this length a revoked token, a disabled account or a
+	// closed session is refused within seconds, while a busy API leaves the provider alone for the
+	// overwhelming majority of its calls. Asking on every single request would put the provider in
+	// front of the whole API, which is the arrangement this module exists to avoid.
+	defaultIntrospectionTTL = 15 * time.Second
+
+	// providerTimeout bounds a single request made to the provider while answering a call, the
+	// UserInfo lookup and the introspection, so an unresponsive provider fails the request rather
+	// than holding a server goroutine for as long as the client waits.
+	providerTimeout = 5 * time.Second
+
+	// defaultIssuerTimeout bounds a request to the issuer when the host pins no client of its own.
+	// http.DefaultClient has no timeout at all, and it is the fallback the OIDC library uses.
+	defaultIssuerTimeout = 10 * time.Second
+
+	// maxCachedUserInfo bounds the number of cached UserInfo lookups, so an attacker presenting
+	// many valid tokens cannot grow the cache without end.
+	maxCachedUserInfo = 4096
 )
 
 // signingAlgorithms are the signature algorithms a token may use.
@@ -37,6 +68,33 @@ type Config struct {
 	// Providers emitting a bare access token state the roles there and nowhere else.
 	RolesFromUserInfo bool
 
+	// ClientSecret authenticates this application when it asks the issuer about a token, as
+	// RFC 7662 requires. A client issued none identifies itself by its id alone.
+	ClientSecret string
+
+	// RequireIntrospection refuses to build a verifier whose issuer advertises no introspection
+	// endpoint, rather than carrying on without one.
+	//
+	// Without that endpoint the issuer is never asked whether a token is one it still stands
+	// behind, so a disabled account, a changed password and an ended session all keep working
+	// until the token expires on its own. That is reported at startup either way, but a warning
+	// is a line in a log: this turns it into a deployment that does not start.
+	RequireIntrospection bool
+
+	// IntrospectionTTL reuses the issuer's answer about a token for that long, trading how quickly
+	// its decisions land against a round trip per request.
+	//
+	// Zero selects a 15 second default, which bounds how long a revoked token keeps working while
+	// keeping the issuer off the path of nearly every request. A negative value asks on every
+	// single request, for a deployment that needs the issuer's word each time and can afford the
+	// provider being reachable for the API to answer at all.
+	IntrospectionTTL time.Duration
+
+	// HTTPClient is the client used to reach the issuer, for discovery, for the signing keys and
+	// for the UserInfo endpoint. It is where a host pins a TLS configuration, a proxy or a
+	// connection budget. Defaults to a client with a bounded timeout.
+	HTTPClient *http.Client
+
 	// Logger receives verification failures. Defaults to types.DiscardLogger.
 	Logger types.Logger
 }
@@ -44,11 +102,18 @@ type Config struct {
 // Verifier validates OIDC bearer tokens and evaluates the authorization policy on their claims.
 type Verifier struct {
 	provider          *oidc.Provider
+	httpClient        *http.Client
 	tokens            *oidc.IDTokenVerifier
 	authorizer        types.Authorizer
 	rolesClaim        string
 	rolesFromUserInfo bool
+	userInfos         *lookupCache[map[string]any]
+	introspector      *introspector
+	introspections    *lookupCache[[]string]
 	logger            types.Logger
+
+	// now reads the current time, replaced by the tests to age the cache without waiting.
+	now func() time.Time
 }
 
 // New builds a Verifier by discovering the issuer configuration and its public keys.
@@ -70,7 +135,11 @@ func New(ctx context.Context, authorizer types.Authorizer, config Config) (*Veri
 		return nil, errors.New("a roles claim is required")
 	}
 
-	provider, err := oidc.NewProvider(ctx, config.IssuerURL)
+	if err := requireSecureIssuer(config.IssuerURL); err != nil {
+		return nil, err
+	}
+
+	provider, err := oidc.NewProvider(issuerContext(ctx, config.HTTPClient), config.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery failed: %w", err)
 	}
@@ -80,24 +149,86 @@ func New(ctx context.Context, authorizer types.Authorizer, config Config) (*Veri
 		SupportedSigningAlgs: signingAlgorithms,
 	})
 
-	return newVerifier(provider, tokens, authorizer, config), nil
+	return newVerifier(provider, tokens, authorizer, config)
+}
+
+// issuerContext carries the HTTP client every request to the issuer must go through.
+// Leaving it to http.DefaultClient would mean no timeout and no say over TLS, on the connection
+// that fetches the signing keys and carries access tokens.
+func issuerContext(ctx context.Context, client *http.Client) context.Context {
+	if client == nil {
+		client = &http.Client{Timeout: defaultIssuerTimeout}
+	}
+
+	return oidc.ClientContext(ctx, client)
 }
 
 // newVerifier assembles a Verifier from an already built token verifier.
-func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authorizer types.Authorizer, config Config) *Verifier {
+func newVerifier(provider *oidc.Provider, tokens *oidc.IDTokenVerifier, authorizer types.Authorizer, config Config) (*Verifier, error) {
 	logger := config.Logger
 	if logger == nil {
 		logger = types.DiscardLogger{}
 	}
 
+	asker, err := buildIntrospector(provider, config, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	introspectionTTL := config.IntrospectionTTL
+	if introspectionTTL == 0 {
+		introspectionTTL = defaultIntrospectionTTL
+	}
+
 	return &Verifier{
 		provider:          provider,
+		httpClient:        config.HTTPClient,
 		tokens:            tokens,
 		authorizer:        authorizer,
 		rolesClaim:        config.RolesClaim,
 		rolesFromUserInfo: config.RolesFromUserInfo,
+		userInfos:         newLookupCache[map[string]any](userInfoTTL, maxCachedUserInfo),
+		introspector:      asker,
+		introspections:    newLookupCache[[]string](introspectionTTL, maxCachedUserInfo),
 		logger:            logger,
+		now:               time.Now,
+	}, nil
+}
+
+// buildIntrospector prepares the question put to the issuer about every token.
+//
+// There is no way to decline asking. The only deployment that does not ask is one whose issuer
+// advertises nowhere to ask, and that is the issuer's statement about itself rather than a choice
+// made here. It is reported loudly, because it is the one case where this module cannot tell a
+// live account from a deleted one — and a deployment that cannot live with that says so with
+// RequireIntrospection, which turns the warning into a refusal to start.
+func buildIntrospector(provider *oidc.Provider, config Config, logger types.Logger) (*introspector, error) {
+	var endpoint string
+
+	if provider != nil {
+		var claims discoveryClaims
+
+		_ = provider.Claims(&claims)
+
+		endpoint = claims.Introspection
 	}
+
+	if endpoint == "" {
+		if config.RequireIntrospection {
+			return nil, errors.New("the issuer advertises no introspection endpoint, so it cannot be asked whether a token is still active: drop the introspection requirement to run without it, knowing a disabled account keeps working until its token expires")
+		}
+
+		logger.Warn("auth: the issuer advertises no introspection endpoint, so it cannot be asked whether a token is still active: a disabled account keeps working until its token expires")
+
+		return nil, nil
+	}
+
+	return &introspector{
+		endpoint:     endpoint,
+		clientID:     config.Audience,
+		clientSecret: config.ClientSecret,
+		client:       config.HTTPClient,
+	}, nil
 }
 
 // tokenClaims are the access token claims an authorization policy can rule on.
@@ -147,10 +278,21 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (types.SessionIn
 		return types.SessionInfo{}, errors.New("id token presented as an access token")
 	}
 
+	// The signature said the token was minted here and the expiry said it is not stale. Neither
+	// can say the account still exists, so the issuer is asked.
+	if err := v.stillActive(ctx, rawToken); err != nil {
+		return types.SessionInfo{}, err
+	}
+
+	roles, err := v.tokenRoles(ctx, token, rawToken, claims.Subject)
+	if err != nil {
+		return types.SessionInfo{}, err
+	}
+
 	user := &types.UserInfo{
 		Provider: token.Issuer,
 		ID:       claims.Subject,
-		Roles:    v.tokenRoles(ctx, token, rawToken),
+		Roles:    roles,
 	}
 
 	decision, err := v.authorizer.Authorize(ctx, user)

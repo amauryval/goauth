@@ -36,6 +36,8 @@ func setupRequest(header string) *http.Request {
 }
 
 func Test_Auth_RequireRoles(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name           string
 		header         string
@@ -146,7 +148,9 @@ func Test_Auth_RequireRoles(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			verifier := &mock.MockVerifier{
+			t.Parallel()
+
+			verifier := &mock.Verifier{
 				Info: types.SessionInfo{
 					LoggedIn:   true,
 					Authorized: c.authorized,
@@ -184,6 +188,8 @@ func Test_Auth_RequireRoles(t *testing.T) {
 }
 
 func Test_Auth_RequireAnyRole(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name           string
 		grantedRoles   []types.Role
@@ -220,7 +226,9 @@ func Test_Auth_RequireAnyRole(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			verifier := &mock.MockVerifier{
+			t.Parallel()
+
+			verifier := &mock.Verifier{
 				Info: types.SessionInfo{
 					LoggedIn:   true,
 					Authorized: true,
@@ -246,6 +254,8 @@ func Test_Auth_RequireAnyRole(t *testing.T) {
 }
 
 func Test_UserFrom(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name     string
 		hasUser  bool
@@ -263,6 +273,8 @@ func Test_UserFrom(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			ctx := context.Background()
 			if c.hasUser {
 				ctx = context.WithValue(ctx, userContextKey{}, mock.SetupMockUser())
@@ -271,6 +283,7 @@ func Test_UserFrom(t *testing.T) {
 			user, found := UserFrom(ctx)
 
 			assert.Equal(t, c.wantUser, found)
+
 			if c.wantUser {
 				require.NotNil(t, user)
 				assert.Equal(t, mock.SetupMockUser().ID, user.ID)
