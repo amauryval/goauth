@@ -143,19 +143,23 @@ application apart from one another site made on a visitor's behalf. The secret s
 losing it signs everyone out, leaking it lets its holder mint sessions, so it belongs wherever the
 deployment keeps its other secrets.
 
-**Replacing that secret** would sign everyone out, were the old one simply dropped. Declare it as
-retired instead: the new secret seals from that moment, the old one still opens the sessions it
-sealed, and nobody notices.
+**Replacing that secret** signs everyone out at once: there is no way to keep the old one honoured
+for sessions already in the wild. That is deliberate — the module holds exactly one cookie secret,
+never a list to prune later — so plan a secret change for a moment sessions being dropped is fine.
+
+**Reading the secret from a file** — for a deployment where the secret store mounts as files rather
+than exposing the environment, such as a Docker or Kubernetes secret — pass `nil` as the secret and
+name the file instead:
 
 ```go
-goauth.WithBrowser(redirectURL, newSecret,
-    goauth.WithRetiredSecrets(previousSecret),
+goauth.WithBrowser(redirectURL, nil,
+    goauth.WithSecretFile("/run/secrets/cookie_secret"),
 )
 ```
 
-Drop the retired secret once the sessions it sealed are gone — they are opened until they expire or
-are next written. Keeping it for ever would leave a leaked secret usable for ever, which is what
-rotating was meant to end.
+The file is read once at startup; a missing or unreadable one fails startup rather than sealing
+cookies under an empty secret. A trailing newline, the kind an editor or a redirected `openssl rand`
+leaves behind, is stripped.
 
 Three more endpoints appear. `GET /auth/login` starts the flow, taking an optional `?return_to`
 that must be a path on this application — an absolute URL is dropped rather than followed, which is

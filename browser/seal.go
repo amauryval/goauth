@@ -26,42 +26,16 @@ const minSecretLength = 32
 // sealer encrypts the cookies this package hands the browser, so their contents are unreadable and
 // unforgeable outside the server. AES-GCM authenticates as well as it encrypts, which is what makes
 // a tampered cookie a decryption failure rather than a value to distrust later.
-//
-// It holds one cipher per secret the deployment declared. The first seals; every one of them opens.
-// That is what lets a secret be replaced without signing everyone out: the new one starts sealing
-// at once, while the sessions already in the wild keep opening under the one they were sealed with,
-// until they expire or are next written.
 type sealer struct {
-	aeads []cipher.AEAD
+	aead cipher.AEAD
 }
 
-// newSealer stretches the host's secrets into keys and prepares the ciphers. The first secret is
-// the one that seals; the rest are retired secrets, kept only so the cookies they sealed still open.
+// newSealer stretches the host's secret into a key and prepares the cipher.
 //
 // A secret is hashed rather than used raw, so a passphrase and a random 32 bytes are both accepted
 // without the caller having to know the key width.
-func newSealer(secret []byte, retired ...[]byte) (*sealer, error) {
-	aeads := make([]cipher.AEAD, 0, 1+len(retired))
-
-	for position, each := range append([][]byte{secret}, retired...) {
-		aead, err := newAEAD(each, position)
-		if err != nil {
-			return nil, err
-		}
-
-		aeads = append(aeads, aead)
-	}
-
-	return &sealer{aeads: aeads}, nil
-}
-
-// newAEAD prepares the cipher of one secret, naming which one failed when it is not usable.
-func newAEAD(secret []byte, position int) (cipher.AEAD, error) {
+func newSealer(secret []byte) (*sealer, error) {
 	if len(secret) < minSecretLength {
-		if position > 0 {
-			return nil, fmt.Errorf("retired cookie secret %d must be at least %d bytes, got %d", position, minSecretLength, len(secret))
-		}
-
 		return nil, fmt.Errorf("the cookie secret must be at least %d bytes, got %d", minSecretLength, len(secret))
 	}
 
@@ -77,12 +51,7 @@ func newAEAD(secret []byte, position int) (cipher.AEAD, error) {
 		return nil, fmt.Errorf("cookie cipher: %w", err)
 	}
 
-	return aead, nil
-}
-
-// sealing is the cipher new cookies are sealed with, which is the one of the current secret.
-func (s *sealer) sealing() cipher.AEAD {
-	return s.aeads[0]
+	return &sealer{aead: aead}, nil
 }
 
 // seal encrypts a payload into a cookie value, binding it to a purpose.
@@ -90,7 +59,7 @@ func (s *sealer) sealing() cipher.AEAD {
 // The purpose is authenticated alongside the payload, so a value sealed for one cookie cannot be
 // replayed as another: a login's pending state can never be presented as an established session.
 func (s *sealer) seal(purpose string, payload []byte) (string, error) {
-	aead := s.sealing()
+	aead := s.aead
 
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
@@ -102,8 +71,7 @@ func (s *sealer) seal(purpose string, payload []byte) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
-// open decrypts a cookie value sealed for the same purpose, under any secret the deployment
-// declared: the one sealing now, or one it has retired but still honours.
+// open decrypts a cookie value sealed for the same purpose under this sealer's secret.
 //
 // Every failure reads the same, since a cookie that does not open is a cookie the caller has no
 // business hearing about: tampered, stale, or sealed by a server holding another secret.
@@ -117,22 +85,19 @@ func (s *sealer) open(purpose, value string) ([]byte, error) {
 		return nil, errCookie
 	}
 
-	// The secrets are tried in turn. A wrong key is a failed authentication tag and nothing else:
-	// it says the cookie was not sealed with it, never anything about the cookie's contents.
-	for _, aead := range s.aeads {
-		if len(sealed) < aead.NonceSize() {
-			continue
-		}
-
-		nonce, ciphertext := sealed[:aead.NonceSize()], sealed[aead.NonceSize():]
-
-		payload, err := aead.Open(nil, nonce, ciphertext, []byte(purpose))
-		if err == nil {
-			return payload, nil
-		}
+	aead := s.aead
+	if len(sealed) < aead.NonceSize() {
+		return nil, errCookie
 	}
 
-	return nil, errCookie
+	nonce, ciphertext := sealed[:aead.NonceSize()], sealed[aead.NonceSize():]
+
+	payload, err := aead.Open(nil, nonce, ciphertext, []byte(purpose))
+	if err != nil {
+		return nil, errCookie
+	}
+
+	return payload, nil
 }
 
 // errCookie reports a cookie that did not open, whatever the reason.

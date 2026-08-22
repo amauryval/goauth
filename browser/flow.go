@@ -67,14 +67,6 @@ type Config struct {
 	// its holder mint sessions, so it belongs wherever the deployment keeps its other secrets.
 	Secret []byte
 
-	// RetiredSecrets are secrets that no longer seal anything but still open what they sealed, so
-	// that replacing Secret does not sign every visitor out at once. Each is at least 32 bytes.
-	//
-	// A retired secret opens sessions until they expire or are next written, so it is kept for as
-	// long as a session may live and dropped after. Keeping one for ever would leave a leaked
-	// secret usable for ever, which is the thing rotating was meant to end.
-	RetiredSecrets [][]byte
-
 	// InsecureCookies drops the Secure attribute, for a local stack served over http.
 	// It must never be set on a deployment: the session then travels in cleartext.
 	InsecureCookies bool
@@ -142,7 +134,7 @@ func New(config Config) (*Flow, error) {
 		return nil, errors.New("an id token verifier is required")
 	}
 
-	sealer, err := newSealer(config.Secret, config.RetiredSecrets...)
+	sealer, err := newSealer(config.Secret)
 	if err != nil {
 		return nil, err
 	}
