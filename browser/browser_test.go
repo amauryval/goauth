@@ -801,43 +801,26 @@ func Test_Flow_LogoutHandler_CrossSite(t *testing.T) {
 	}
 }
 
-// Test_Flow_SecretRotation pins the rotation from the outside: a browser holding a session sealed
-// by the previous secret keeps it, and hands over the same access token, while a deployment that
-// dropped that secret signs it out. It is what makes replacing the secret an operation rather than
-// an outage.
+// Test_Flow_SecretRotation pins that replacing the secret signs out every session sealed under the
+// previous one: there is no retired secret kept around to still open it.
 func Test_Flow_SecretRotation(t *testing.T) {
 	t.Parallel()
 
-	const retiredSecret = "a-retired-secret-of-at-least-32-bytes"
+	const previousSecret = "a-previous-secret-of-at-least-32-bytes"
 
 	server, _ := setupIssuer(t, nil)
 
-	before := setupFlow(t, server, func(c *Config) { c.Secret = []byte(retiredSecret) })
+	before := setupFlow(t, server, func(c *Config) { c.Secret = []byte(previousSecret) })
 	established := sealedSession(t, before, session{
 		AccessToken: "an-access-token",
 		Expiry:      time.Now().Add(time.Hour),
 	})
 
-	t.Run("the retired secret is still honoured", func(t *testing.T) {
-		t.Parallel()
+	after := setupFlow(t, server, nil)
 
-		after := setupFlow(t, server, func(c *Config) { c.RetiredSecrets = [][]byte{[]byte(retiredSecret)} })
+	request := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
+	request.AddCookie(established)
 
-		request := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
-		request.AddCookie(established)
-
-		assert.Equal(t, "an-access-token", after.Token(httptest.NewRecorder(), request))
-	})
-
-	t.Run("dropping it signs the session out", func(t *testing.T) {
-		t.Parallel()
-
-		after := setupFlow(t, server, nil)
-
-		request := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
-		request.AddCookie(established)
-
-		assert.Empty(t, after.Token(httptest.NewRecorder(), request),
-			"a secret the deployment no longer declares must open nothing")
-	})
+	assert.Empty(t, after.Token(httptest.NewRecorder(), request),
+		"a secret the deployment no longer declares must open nothing")
 }

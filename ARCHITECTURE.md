@@ -77,10 +77,9 @@ authorization code flow with PKCE and holds the tokens; this module only verifie
 
     What it holds is what it reads: the two tokens, and the ID token only because a provider wants
     it back as a logout hint. It carries no lifetime of its own — how long a sign in stays good is
-    how long the provider keeps honouring the refresh token. The sealing secret can be replaced
-    without signing anyone out: the sealer holds one cipher per declared secret, the first sealing
-    and all of them opening, so a retired secret keeps opening what it sealed until those sessions
-    are gone. Cookie names, paths and the SameSite
+    how long the provider keeps honouring the refresh token. The module holds exactly one cookie
+    secret; replacing it signs every session out at once, rather than keeping a list of retired
+    ones around to prune later. Cookie names, paths and the SameSite
     policy are not settings, because nothing needed them to be.
 -   `types` — `Role`, `Decision`, `Authorizer`, `TokenVerifier`, `UserInfo`, `SessionInfo`,
     `Logger`.

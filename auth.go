@@ -92,6 +92,10 @@ func newVerified(ctx context.Context, settings Settings, selected provider.Provi
 func (a *Auth) driveBrowserFlow(settings Settings, tokenVerifier *verifier.Verifier, selected provider.Provider, logger types.Logger) error {
 	options := settings.Browser()
 
+	if err := options.resolveSecretFiles(); err != nil {
+		return err
+	}
+
 	flow, err := browser.New(browser.Config{
 		Endpoints:       tokenVerifier.Endpoints(),
 		IDTokens:        tokenVerifier,
@@ -100,7 +104,6 @@ func (a *Auth) driveBrowserFlow(settings Settings, tokenVerifier *verifier.Verif
 		RedirectURL:     options.RedirectURL,
 		Scopes:          selected.Scopes(),
 		Secret:          options.Secret,
-		RetiredSecrets:  options.RetiredSecrets,
 		InsecureCookies: options.InsecureCookies,
 		PostLoginPath:   options.PostLoginPath,
 		PostLogoutURL:   options.PostLogoutURL,

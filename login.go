@@ -33,9 +33,9 @@ type BrowserOptions struct {
 	// Secret seals the session cookie, at least 32 bytes.
 	Secret []byte
 
-	// RetiredSecrets are secrets that no longer seal anything but still open what they sealed, so
-	// that replacing Secret does not sign every visitor out at once. Each is at least 32 bytes.
-	RetiredSecrets [][]byte
+	// secretFile, set through WithSecretFile, names a file Secret is read from instead of being
+	// passed directly, for a deployment where the secret store mounts as files.
+	secretFile string
 
 	// PostLoginPath is where a finished login lands when it named no destination, defaulting to
 	// "/". It is a path on this application, never an absolute URL.
@@ -69,14 +69,17 @@ func WithBrowser(redirectURL string, secret []byte, options ...BrowserOption) Op
 	}
 }
 
-// WithRetiredSecrets keeps opening the sessions an earlier secret sealed, so that replacing the
-// cookie secret does not sign every visitor out at once. Each secret must be at least 32 bytes.
+// WithSecretFile reads the cookie secret from a file instead of the value WithBrowser was given
+// directly, for a deployment where the secret store mounts as files rather than exposing the
+// environment — Docker and Kubernetes secrets both work this way. Pass nil as WithBrowser's secret
+// when using it.
 //
-// A retired secret opens sessions until they expire or are next written, so it is kept for as long
-// as a session may live and dropped after: one kept for ever would leave a leaked secret usable for
-// ever, which is the thing rotating was meant to end.
-func WithRetiredSecrets(secrets ...[]byte) BrowserOption {
-	return func(o *BrowserOptions) { o.RetiredSecrets = secrets }
+// A trailing newline, the kind an editor or `openssl rand -base64 48 > file` leaves behind, is
+// stripped; the rest of the file's bytes are used unchanged. The file is read once, when the
+// deployment starts, so a change to it is only picked up on the next restart. A missing or
+// unreadable file fails startup rather than sealing cookies under an empty secret.
+func WithSecretFile(path string) BrowserOption {
+	return func(o *BrowserOptions) { o.secretFile = path }
 }
 
 // WithPostLoginPath is where a finished login lands when it named no destination, defaulting to
